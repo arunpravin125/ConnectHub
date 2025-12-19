@@ -5,28 +5,73 @@ import { getRecipiantSocketId, io } from "../socket/socket.js";
 
 export const sendMessage = async (req, res) => {
   try {
-    const { recipientId, message } = req.body;
+    const { recipientId, message, conversationId } = req.body; // Support both direct (recipientId) and group (conversationId)
     let { img, video } = req.body;
     const senderId = req.user._id;
-    
+
     // Check if file was uploaded via multipart/form-data
     const uploadedFile = req.file;
-    
-    console.log("sendMessage called - File:", uploadedFile ? `${uploadedFile.originalname} (${uploadedFile.size} bytes)` : "none");
 
-    let conversation = await Conversation.findOne({
-      participants: { $all: [senderId, recipientId] },
-    });
+    console.log(
+      "sendMessage called - File:",
+      uploadedFile
+        ? `${uploadedFile.originalname} (${uploadedFile.size} bytes)`
+        : "none"
+    );
 
-    if (!conversation) {
-      conversation = new Conversation({
-        participants: [senderId, recipientId],
-        lastMessage: {
-          text: message,
-          sender: senderId,
-        },
+    let conversation;
+
+    // If conversationId provided, it's a group chat
+    if (conversationId) {
+      conversation = await Conversation.findById(conversationId);
+      if (!conversation) {
+        return res.status(404).json({ error: "Conversation not found" });
+      }
+
+      // Check if user is a member (for groups) or participant (for direct)
+      if (conversation.type === "group") {
+        const isMember = conversation.members.some(
+          (m) => m.userId.toString() === senderId.toString()
+        );
+        if (!isMember) {
+          return res
+            .status(403)
+            .json({ error: "You are not a member of this group" });
+        }
+      } else {
+        const isParticipant = conversation.participants.some(
+          (p) => p.toString() === senderId.toString()
+        );
+        if (!isParticipant) {
+          return res
+            .status(403)
+            .json({ error: "You are not a participant in this conversation" });
+        }
+      }
+    } else {
+      // Direct chat: find or create conversation
+      if (!recipientId) {
+        return res
+          .status(400)
+          .json({ error: "recipientId or conversationId is required" });
+      }
+
+      conversation = await Conversation.findOne({
+        type: "direct",
+        participants: { $all: [senderId, recipientId] },
       });
-      await conversation.save();
+
+      if (!conversation) {
+        conversation = new Conversation({
+          type: "direct",
+          participants: [senderId, recipientId],
+          lastMessage: {
+            text: message,
+            sender: senderId,
+          },
+        });
+        await conversation.save();
+      }
     }
 
     // Handle file upload (PDF, DOC, DOCX, Audio) via multipart/form-data
@@ -34,59 +79,85 @@ export const sendMessage = async (req, res) => {
     let fileName = "";
     let fileType = "";
     let audio = "";
-    
+
     if (uploadedFile) {
       try {
         let fileMimeType = uploadedFile.mimetype;
-        
+
         // Handle cases where MIME type might not be set correctly
         if (!fileMimeType || fileMimeType === "application/octet-stream") {
           // Try to detect from filename
           const fileName = uploadedFile.originalname.toLowerCase();
-          if (fileName.endsWith(".webm") || fileName.endsWith(".ogg") || fileName.endsWith(".wav") || fileName.endsWith(".mp3") || fileName.endsWith(".m4a")) {
+          if (
+            fileName.endsWith(".webm") ||
+            fileName.endsWith(".ogg") ||
+            fileName.endsWith(".wav") ||
+            fileName.endsWith(".mp3") ||
+            fileName.endsWith(".m4a")
+          ) {
             fileMimeType = "audio/webm"; // Default to webm for MediaRecorder
             console.log("Detected audio file from filename:", fileName);
-          } else if (fileName.endsWith(".mp4") || fileName.endsWith(".mov") || fileName.endsWith(".avi")) {
+          } else if (
+            fileName.endsWith(".mp4") ||
+            fileName.endsWith(".mov") ||
+            fileName.endsWith(".avi")
+          ) {
             fileMimeType = "video/mp4";
-          } else if (fileName.endsWith(".jpg") || fileName.endsWith(".jpeg") || fileName.endsWith(".png")) {
+          } else if (
+            fileName.endsWith(".jpg") ||
+            fileName.endsWith(".jpeg") ||
+            fileName.endsWith(".png")
+          ) {
             fileMimeType = "image/jpeg";
           }
         }
-        
-        console.log("File upload detected. MIME type:", fileMimeType, "Size:", uploadedFile.size, "bytes");
-        
+
+        console.log(
+          "File upload detected. MIME type:",
+          fileMimeType,
+          "Size:",
+          uploadedFile.size,
+          "bytes"
+        );
+
         // Validate file size
         if (!uploadedFile.size || uploadedFile.size === 0) {
           return res.status(400).json({
             error: "Empty file uploaded",
           });
         }
-        
+
         if (uploadedFile.size > 20 * 1024 * 1024) {
           return res.status(400).json({
             error: "File size exceeds 20MB limit",
           });
         }
-        
+
         let resourceType = "raw"; // Default for documents
-        
+
         // Determine resource type based on file type
         if (fileMimeType.startsWith("image/")) {
           resourceType = "image";
         } else if (fileMimeType.startsWith("video/")) {
           resourceType = "video";
-        } else if (fileMimeType.startsWith("audio/") || fileMimeType.includes("webm") || fileMimeType.includes("audio")) {
+        } else if (
+          fileMimeType.startsWith("audio/") ||
+          fileMimeType.includes("webm") ||
+          fileMimeType.includes("audio")
+        ) {
           resourceType = "video"; // Cloudinary uses "video" resource type for audio files
         } else {
           resourceType = "raw"; // For PDF, DOC, DOCX
         }
-        
+
         // Convert buffer to base64 for Cloudinary
         // For large files, use stream upload instead of base64 to avoid memory issues
         let dataURI;
         if (uploadedFile.size > 5 * 1024 * 1024) {
           // For files larger than 5MB, use buffer directly with Cloudinary's upload_stream
-          console.log(`Large file detected (${uploadedFile.size} bytes), using stream upload...`);
+          console.log(
+            `Large file detected (${uploadedFile.size} bytes), using stream upload...`
+          );
           // We'll use the buffer directly in upload_stream
           dataURI = null; // Signal to use stream upload
         } else {
@@ -94,27 +165,38 @@ export const sendMessage = async (req, res) => {
           const base64File = uploadedFile.buffer.toString("base64");
           dataURI = `data:${fileMimeType};base64,${base64File}`;
         }
-        
-        console.log(`Uploading ${fileMimeType} file to Cloudinary... (Size: ${uploadedFile.size} bytes)`);
-        
+
+        console.log(
+          `Uploading ${fileMimeType} file to Cloudinary... (Size: ${uploadedFile.size} bytes)`
+        );
+
         // Configure upload options based on file type
         const uploadOptions = {
           resource_type: resourceType,
-          folder: resourceType === "image" 
-            ? "threads/messages/images"
-            : resourceType === "video"
-            ? (fileMimeType.startsWith("audio/") || fileMimeType.includes("webm") || fileMimeType.includes("audio") ? "threads/messages/audio" : "threads/messages/videos")
-            : "threads/messages/files",
+          folder:
+            resourceType === "image"
+              ? "threads/messages/images"
+              : resourceType === "video"
+              ? fileMimeType.startsWith("audio/") ||
+                fileMimeType.includes("webm") ||
+                fileMimeType.includes("audio")
+                ? "threads/messages/audio"
+                : "threads/messages/videos"
+              : "threads/messages/files",
           timeout: 300000, // 5 minutes timeout for large files
         };
-        
+
         // Add transformations based on resource type
         if (resourceType === "image") {
           uploadOptions.transformation = [
             { width: 800, height: 800, crop: "limit", quality: "auto" },
           ];
         } else if (resourceType === "video") {
-          if (fileMimeType.startsWith("audio/") || fileMimeType.includes("webm") || fileMimeType.includes("audio")) {
+          if (
+            fileMimeType.startsWith("audio/") ||
+            fileMimeType.includes("webm") ||
+            fileMimeType.includes("audio")
+          ) {
             // Audio file - upload as-is without transformation to avoid processing delays
             // WebM audio is widely supported by browsers, no need to convert
             uploadOptions.chunk_size = 6000000; // 6MB chunks for better reliability
@@ -133,12 +215,15 @@ export const sendMessage = async (req, res) => {
             uploadOptions.chunk_size = 6000000; // 6MB chunks
           }
         }
-        
+
         let uploadedResponse;
-        
+
         if (dataURI) {
           // Use base64 upload for smaller files
-          uploadedResponse = await cloudinary.uploader.upload(dataURI, uploadOptions);
+          uploadedResponse = await cloudinary.uploader.upload(
+            dataURI,
+            uploadOptions
+          );
         } else {
           // Use stream upload for larger files
           uploadedResponse = await new Promise((resolve, reject) => {
@@ -156,17 +241,22 @@ export const sendMessage = async (req, res) => {
             uploadStream.end(uploadedFile.buffer);
           });
         }
-        
+
         fileName = uploadedFile.originalname;
         fileType = fileMimeType;
-        
+
         // Set img, video, or audio based on file type
         // Only set fileUrl for document files (PDF, DOC, DOCX), not for media files
         if (resourceType === "image") {
           img = uploadedResponse.secure_url;
           // Don't set fileUrl for images - use img field instead
         } else if (resourceType === "video") {
-          if (fileMimeType.startsWith("audio/") || fileMimeType.includes("webm") || fileMimeType.includes("audio") || uploadedFile.originalname.toLowerCase().includes("audio")) {
+          if (
+            fileMimeType.startsWith("audio/") ||
+            fileMimeType.includes("webm") ||
+            fileMimeType.includes("audio") ||
+            uploadedFile.originalname.toLowerCase().includes("audio")
+          ) {
             audio = uploadedResponse.secure_url;
             console.log("Audio file detected and uploaded:", audio);
             // Don't set fileUrl for audio - use audio field instead
@@ -178,7 +268,7 @@ export const sendMessage = async (req, res) => {
           // For document files (PDF, DOC, DOCX), set fileUrl
           fileUrl = uploadedResponse.secure_url;
         }
-        
+
         console.log(`File uploaded successfully: ${fileName}`);
       } catch (cloudinaryError) {
         console.error("Cloudinary file upload error:", cloudinaryError);
@@ -191,7 +281,8 @@ export const sendMessage = async (req, res) => {
         });
         return res.status(500).json({
           error: "Failed to upload file to Cloudinary",
-          details: cloudinaryError.message || "Unknown error occurred during upload",
+          details:
+            cloudinaryError.message || "Unknown error occurred during upload",
         });
       }
     }
@@ -271,11 +362,12 @@ export const sendMessage = async (req, res) => {
         error: "Cannot upload multiple media types in the same message",
       });
     }
-    
+
     // Ensure file is not sent with other media
     if (fileUrl && (img || video || audio)) {
       return res.status(400).json({
-        error: "Cannot upload file with image, video, or audio in the same message",
+        error:
+          "Cannot upload file with image, video, or audio in the same message",
       });
     }
 
@@ -295,51 +387,120 @@ export const sendMessage = async (req, res) => {
       newMessage.save(),
       conversation.updateOne({
         lastMessage: {
-          text: message || (img ? "📷 Image" : video ? "🎥 Video" : audio ? "🎤 Audio" : fileUrl ? `📎 ${fileName}` : ""),
+          text:
+            message ||
+            (img
+              ? "📷 Image"
+              : video
+              ? "🎥 Video"
+              : audio
+              ? "🎤 Audio"
+              : fileUrl
+              ? `📎 ${fileName}`
+              : ""),
           sender: senderId,
         },
       }),
     ]);
 
-    // Emit to recipient
-    const recipientSocketId = getRecipiantSocketId(recipientId);
-    if (recipientSocketId) {
-      console.log(`📤 Emitting newMessage to recipient ${recipientId} (socket: ${recipientSocketId})`);
-      io.to(recipientSocketId).emit("newMessage", newMessage);
+    // Emit message based on conversation type
+    if (conversation.type === "group") {
+      // For groups: emit to all members via socket room
+      io.to(`chat:${conversation._id}`).emit("newMessage", newMessage);
+      console.log(`📤 Emitting newMessage to group chat:${conversation._id}`);
     } else {
-      console.warn(`⚠️ Recipient ${recipientId} not connected (socket not found)`);
-    }
+      // For direct chats: emit to recipient and sender
+      const recipientId = conversation.participants.find(
+        (p) => p.toString() !== senderId.toString()
+      );
 
-    // Also emit to sender so they see the message immediately and conversation list updates
-    const senderSocketId = getRecipiantSocketId(senderId);
-    if (senderSocketId) {
-      console.log(`📤 Emitting newMessage to sender ${senderId} (socket: ${senderSocketId})`);
-      io.to(senderSocketId).emit("newMessage", newMessage);
+      if (recipientId) {
+        const recipientSocketId = getRecipiantSocketId(recipientId);
+        if (recipientSocketId) {
+          console.log(
+            `📤 Emitting newMessage to recipient ${recipientId} (socket: ${recipientSocketId})`
+          );
+          io.to(recipientSocketId).emit("newMessage", newMessage);
+        } else {
+          console.warn(
+            `⚠️ Recipient ${recipientId} not connected (socket not found)`
+          );
+        }
+      }
+
+      // Also emit to sender so they see the message immediately and conversation list updates
+      const senderSocketId = getRecipiantSocketId(senderId);
+      if (senderSocketId) {
+        console.log(
+          `📤 Emitting newMessage to sender ${senderId} (socket: ${senderSocketId})`
+        );
+        io.to(senderSocketId).emit("newMessage", newMessage);
+      }
     }
 
     res.status(201).json(newMessage);
   } catch (error) {
     console.error("Error in sendMessage:", error);
     console.error("Error stack:", error.stack);
-    res.status(500).json({ 
+    res.status(500).json({
       error: error.message || "Internal server error",
-      details: process.env.NODE_ENV === "development" ? error.stack : undefined
+      details: process.env.NODE_ENV === "development" ? error.stack : undefined,
     });
   }
 };
 
 export const getMessages = async (req, res) => {
-  const { otherUserId } = req.params;
+  // Support both direct (otherUserId from path) and group (conversationId from path)
+  const { otherUserId, conversationId } = req.params;
   const { page = 1, limit = 20 } = req.query;
   const userId = req.user._id;
-  
-  try {
-    const conversation = await Conversation.findOne({
-      participants: { $all: [userId, otherUserId] },
-    });
 
-    if (!conversation) {
-      return res.status(404).json({ error: "no conversation found" });
+  try {
+    let conversation;
+
+    // If conversationId provided, it's a group chat
+    if (conversationId) {
+      conversation = await Conversation.findById(conversationId);
+      if (!conversation) {
+        return res.status(404).json({ error: "Conversation not found" });
+      }
+
+      // Check if user is a member (for groups) or participant (for direct)
+      if (conversation.type === "group") {
+        const isMember = conversation.members.some(
+          (m) => m.userId.toString() === userId.toString()
+        );
+        if (!isMember) {
+          return res
+            .status(403)
+            .json({ error: "You are not a member of this group" });
+        }
+      } else {
+        const isParticipant = conversation.participants.some(
+          (p) => p.toString() === userId.toString()
+        );
+        if (!isParticipant) {
+          return res
+            .status(403)
+            .json({ error: "You are not a participant in this conversation" });
+        }
+      }
+    } else {
+      // Direct chat: find conversation
+      if (!otherUserId) {
+        return res
+          .status(400)
+          .json({ error: "otherUserId or conversationId is required" });
+      }
+
+      conversation = await Conversation.findOne({
+        type: "direct",
+        participants: { $all: [userId, otherUserId] },
+      });
+
+      if (!conversation) {
+        return res.status(404).json({ error: "no conversation found" });
+      }
     }
 
     // Convert page and limit to numbers
@@ -418,10 +579,19 @@ export const deleteForMe = async (req, res) => {
       return res.status(404).json({ error: "Conversation not found" });
     }
 
-    const isParticipant = conversation.participants.some(
-      (p) => p.toString() === userId.toString()
-    );
-    if (!isParticipant) {
+    // Check membership based on conversation type
+    let isAuthorized = false;
+    if (conversation.type === "group") {
+      isAuthorized = conversation.members.some(
+        (m) => m.userId.toString() === userId.toString()
+      );
+    } else {
+      isAuthorized = conversation.participants.some(
+        (p) => p.toString() === userId.toString()
+      );
+    }
+
+    if (!isAuthorized) {
       return res.status(403).json({ error: "Not authorized" });
     }
 
@@ -506,20 +676,36 @@ export const deleteForEveryone = async (req, res) => {
 
     const updatedMessage = await Message.findById(messageId);
 
-    // Emit socket event to both participants
+    // Emit socket event to all participants/members
     const conversation = await Conversation.findById(message.conversationId);
-    if (conversation && conversation.participants) {
-      conversation.participants.forEach((participantId) => {
-        const participantSocketId = getRecipiantSocketId(participantId);
-        if (participantSocketId) {
-          io.to(participantSocketId).emit("message:deleted_for_all", {
+    if (conversation) {
+      if (conversation.type === "group") {
+        // For groups: emit to room
+        io.to(`chat:${message.conversationId}`).emit(
+          "message:deleted_for_all",
+          {
             messageId,
             conversationId: message.conversationId,
             deletedForAll: true,
             tombstoneText: "This message was deleted",
+          }
+        );
+      } else {
+        // For direct chats: emit to participants
+        if (conversation.participants) {
+          conversation.participants.forEach((participantId) => {
+            const participantSocketId = getRecipiantSocketId(participantId);
+            if (participantSocketId) {
+              io.to(participantSocketId).emit("message:deleted_for_all", {
+                messageId,
+                conversationId: message.conversationId,
+                deletedForAll: true,
+                tombstoneText: "This message was deleted",
+              });
+            }
           });
         }
-      });
+      }
     }
 
     res.status(200).json({
@@ -537,20 +723,41 @@ export const deleteForEveryone = async (req, res) => {
 export const getConversation = async (req, res) => {
   const userId = req.user._id;
   try {
-    let conversation = await Conversation.find({
+    // Get both direct chats (where user is in participants) and group chats (where user is in members)
+    const directChats = await Conversation.find({
+      type: "direct",
       participants: userId,
     }).populate({
       path: "participants",
-      select: "username profilePic",
+      select: "username name profilePic",
     });
 
-    conversation.forEach((conversation) => {
+    const groupChats = await Conversation.find({
+      type: "group",
+      "members.userId": userId,
+    })
+      .populate("members.userId", "username name profilePic")
+      .populate("createdBy", "username name profilePic")
+      .populate("participants", "username name profilePic");
+
+    // For direct chats, filter out current user from participants
+    directChats.forEach((conversation) => {
       conversation.participants = conversation.participants.filter(
-        (participants) => participants._id.toString() !== userId.toString()
+        (participant) => participant._id.toString() !== userId.toString()
       );
     });
 
-    res.status(200).json(conversation);
+    // Combine and return
+    const allConversations = [...directChats, ...groupChats];
+
+    // Sort by last message timestamp (most recent first)
+    allConversations.sort((a, b) => {
+      const aTime = a.updatedAt || a.createdAt;
+      const bTime = b.updatedAt || b.createdAt;
+      return new Date(bTime) - new Date(aTime);
+    });
+
+    res.status(200).json(allConversations);
   } catch (error) {
     res.status(500).json({ error: error });
     console.log(error.message);

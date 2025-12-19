@@ -7,6 +7,14 @@ import {
   deleteForMe,
   deleteForEveryone,
 } from "../controllers/messageController.js";
+import {
+  createGroup,
+  addMembers,
+  removeMember,
+  updateMemberRole,
+  leaveGroup,
+  updateGroupInfo,
+} from "../controllers/groupChatController.js";
 import multer from "multer";
 
 // Configure multer for file uploads (memory storage for Cloudinary)
@@ -28,26 +36,36 @@ const upload = multer({
     ];
 
     // Check MIME type
-    const isValidMimeType = allowedTypes.some((type) => file.mimetype.startsWith(type)) ||
+    const isValidMimeType =
+      allowedTypes.some((type) => file.mimetype.startsWith(type)) ||
       file.mimetype === "application/pdf" ||
       file.mimetype === "application/msword" ||
-      file.mimetype === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
+      file.mimetype ===
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
       file.mimetype === "application/octet-stream"; // Allow octet-stream (might be audio/webm from MediaRecorder)
 
     // Also check filename extension for audio files (MediaRecorder might not set MIME type correctly)
     const fileName = file.originalname.toLowerCase();
-    const isValidAudioExtension = fileName.endsWith(".webm") || 
-      fileName.endsWith(".ogg") || 
-      fileName.endsWith(".wav") || 
-      fileName.endsWith(".mp3") || 
+    const isValidAudioExtension =
+      fileName.endsWith(".webm") ||
+      fileName.endsWith(".ogg") ||
+      fileName.endsWith(".wav") ||
+      fileName.endsWith(".mp3") ||
       fileName.endsWith(".m4a");
 
     if (isValidMimeType || isValidAudioExtension) {
       cb(null, true);
     } else {
-      console.log("File rejected - MIME type:", file.mimetype, "Filename:", file.originalname);
+      console.log(
+        "File rejected - MIME type:",
+        file.mimetype,
+        "Filename:",
+        file.originalname
+      );
       cb(
-        new Error("Only images, videos, audio, PDF, DOC, and DOCX files are allowed"),
+        new Error(
+          "Only images, videos, audio, PDF, DOC, and DOCX files are allowed"
+        ),
         false
       );
     }
@@ -87,6 +105,19 @@ const handleMulterError = (err, req, res, next) => {
   next();
 };
 
+// Group chat routes (must come before generic routes)
+messageRoutes.post("/group", protectRoute, createGroup);
+messageRoutes.post("/:chatId/members", protectRoute, addMembers);
+messageRoutes.delete("/:chatId/members/:memberId", protectRoute, removeMember);
+messageRoutes.post(
+  "/:chatId/members/:memberId/role",
+  protectRoute,
+  updateMemberRole
+);
+messageRoutes.post("/:chatId/leave", protectRoute, leaveGroup);
+messageRoutes.put("/:chatId/info", protectRoute, updateGroupInfo);
+
+// Existing message routes
 messageRoutes.post(
   "/",
   protectRoute,
@@ -97,5 +128,11 @@ messageRoutes.post(
 messageRoutes.post("/users", protectRoute, getConversation);
 // Delete routes must come before the generic :otherUserId route
 messageRoutes.post("/:messageId/delete-for-me", protectRoute, deleteForMe);
-messageRoutes.post("/:messageId/delete-for-everyone", protectRoute, deleteForEveryone);
+messageRoutes.post(
+  "/:messageId/delete-for-everyone",
+  protectRoute,
+  deleteForEveryone
+);
+// Get messages - support both direct (otherUserId) and group (conversationId)
+messageRoutes.get("/conversation/:conversationId", protectRoute, getMessages);
 messageRoutes.get("/:otherUserId", protectRoute, getMessages);

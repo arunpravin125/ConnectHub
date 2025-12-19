@@ -44,6 +44,24 @@ const storySchema = mongoose.Schema(
       enum: ["public"],
       default: "public",
     },
+    replies: [
+      {
+        userId: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "User",
+          required: true,
+        },
+        text: {
+          type: String,
+          required: true,
+          maxLength: 500,
+        },
+        repliedAt: {
+          type: Date,
+          default: Date.now,
+        },
+      },
+    ],
   },
   {
     timestamps: true,
@@ -57,4 +75,3 @@ storySchema.index({ expiresAt: 1 }); // TTL index (auto-delete after expiresAt)
 const Story = mongoose.model("Story", storySchema);
 
 export default Story;
-

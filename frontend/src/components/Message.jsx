@@ -14,16 +14,21 @@ import {
   MenuItem,
   IconButton,
 } from "@chakra-ui/react";
-import React, { useState } from "react";
+import React, { useState, useMemo } from "react";
 import { useRecoilValue } from "recoil";
 import { selectedConversationAtom } from "../atoms/conversationAtom";
 import userAtom from "../atoms/userAtom";
 import { BsCheck2All } from "react-icons/bs";
-import { BsFileEarmarkPdf, BsFileEarmarkWord, BsFileEarmark } from "react-icons/bs";
+import {
+  BsFileEarmarkPdf,
+  BsFileEarmarkWord,
+  BsFileEarmark,
+} from "react-icons/bs";
 import { FiDownload } from "react-icons/fi";
 import { FaMicrophone } from "react-icons/fa";
 import { CgMoreVertical } from "react-icons/cg";
 import toast from "react-hot-toast";
+import LinkPreview from "./LinkPreview";
 
 const Message = ({ ownMessage, message, onDelete }) => {
   const selectedConversation = useRecoilValue(selectedConversationAtom);
@@ -31,12 +36,36 @@ const Message = ({ ownMessage, message, onDelete }) => {
   const [isImgLoading, setIsImgLoading] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
 
+  // Extract URLs from message text
+  const extractUrls = (text) => {
+    if (!text) return [];
+    const urlRegex = /(https?:\/\/[^\s]+)/g;
+    const urls = text.match(urlRegex) || [];
+    return urls.filter((url) => {
+      try {
+        const urlObj = new URL(url);
+        // Only show previews for post and story URLs
+        const pathParts = urlObj.pathname.split("/").filter(Boolean);
+        return (
+          (pathParts.length >= 3 && pathParts[1] === "post") ||
+          (pathParts.length >= 2 && pathParts[1] === "story")
+        );
+      } catch {
+        return false;
+      }
+    });
+  };
+
+  const urlsInMessage = useMemo(() => {
+    return message.text ? extractUrls(message.text) : [];
+  }, [message.text]);
+
   // Check if message is deleted for everyone (tombstone)
   const isTombstone = message.deletedForAll || message.type === "tombstone";
-  
+
   // Check if user can delete for everyone (sender only, within 48 hours)
   const canDeleteForEveryone = ownMessage && !isTombstone;
-  const messageAge = message.createdAt 
+  const messageAge = message.createdAt
     ? Date.now() - new Date(message.createdAt).getTime()
     : Infinity;
   const within48Hours = messageAge <= 48 * 60 * 60 * 1000;
@@ -66,10 +95,13 @@ const Message = ({ ownMessage, message, onDelete }) => {
     if (isDeleting) return;
     setIsDeleting(true);
     try {
-      const res = await fetch(`/api/messages/${message._id}/delete-for-everyone`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-      });
+      const res = await fetch(
+        `/api/messages/${message._id}/delete-for-everyone`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+        }
+      );
       const data = await res.json();
       if (data.error) throw new Error(data.error);
       if (onDelete) onDelete(message._id, "everyone");
@@ -86,7 +118,9 @@ const Message = ({ ownMessage, message, onDelete }) => {
   if (isTombstone) {
     return (
       <Flex gap={2} alignSelf={ownMessage ? "flex-end" : "flex-start"}>
-        {!ownMessage && <Avatar src={selectedConversation.userProfilePic} w="7" h={7} />}
+        {!ownMessage && (
+          <Avatar src={selectedConversation.userProfilePic} w="7" h={7} />
+        )}
         <Flex
           bg={useColorModeValue("gray.100", "gray.700")}
           maxW={"350px"}
@@ -115,22 +149,43 @@ const Message = ({ ownMessage, message, onDelete }) => {
         <Flex gap={2} alignSelf={"flex-end"} position="relative" group>
           {message.text && (
             <Flex
-              bg={useColorModeValue("brand.500", "brand.400")}
+              flexDirection="column"
               maxW={"350px"}
-              p={2}
-              borderRadius={"xl"}
               alignItems="flex-end"
               gap={2}
             >
-              <Text color={"white"}>{message.text}</Text>
-              <Box
-                alignSelf={"flex-end"}
-                ml={1}
-                color={message.seen ? "whiteAlpha.900" : "whiteAlpha.700"}
-                fontWeight={"bold"}
+              <Flex
+                bg={useColorModeValue("brand.500", "brand.400")}
+                p={2}
+                borderRadius={"xl"}
+                alignItems="flex-end"
+                gap={2}
               >
-                <BsCheck2All size={16} />
-              </Box>
+                <Text
+                  color={"white"}
+                  whiteSpace="pre-wrap"
+                  wordBreak="break-word"
+                >
+                  {message.text}
+                </Text>
+                <Box
+                  alignSelf={"flex-end"}
+                  ml={1}
+                  color={message.seen ? "whiteAlpha.900" : "whiteAlpha.700"}
+                  fontWeight={"bold"}
+                  flexShrink={0}
+                >
+                  <BsCheck2All size={16} />
+                </Box>
+              </Flex>
+              {/* Link Previews */}
+              {urlsInMessage.length > 0 && (
+                <Flex flexDirection="column" gap={2} w="full">
+                  {urlsInMessage.map((url, index) => (
+                    <LinkPreview key={index} url={url} />
+                  ))}
+                </Flex>
+              )}
             </Flex>
           )}
           {message.img && !isImgLoading && (
@@ -271,7 +326,10 @@ const Message = ({ ownMessage, message, onDelete }) => {
                 Delete for me
               </MenuItem>
               {showDeleteForEveryone && (
-                <MenuItem onClick={handleDeleteForEveryone} isDisabled={isDeleting}>
+                <MenuItem
+                  onClick={handleDeleteForEveryone}
+                  isDisabled={isDeleting}
+                >
                   Delete for everyone
                 </MenuItem>
               )}
@@ -282,15 +340,26 @@ const Message = ({ ownMessage, message, onDelete }) => {
         <Flex gap={2} alignSelf={"flex-start"} position="relative" group>
           <Avatar src={selectedConversation.userProfilePic} w="7" h={7} />
           {message.text && (
-            <Text
-              maxW={"350px"}
-              color={useColorModeValue("ink.900", "whiteAlpha.900")}
-              bg={useColorModeValue("sand.200", "ink.700")}
-              p={2}
-              borderRadius={"xl"}
-            >
-              {message.text}
-            </Text>
+            <Flex flexDirection="column" maxW={"350px"} gap={2}>
+              <Text
+                color={useColorModeValue("ink.900", "whiteAlpha.900")}
+                bg={useColorModeValue("sand.200", "ink.700")}
+                p={2}
+                borderRadius={"xl"}
+                whiteSpace="pre-wrap"
+                wordBreak="break-word"
+              >
+                {message.text}
+              </Text>
+              {/* Link Previews */}
+              {urlsInMessage.length > 0 && (
+                <Flex flexDirection="column" gap={2}>
+                  {urlsInMessage.map((url, index) => (
+                    <LinkPreview key={index} url={url} />
+                  ))}
+                </Flex>
+              )}
+            </Flex>
           )}
 
           {message.img && !isImgLoading && (

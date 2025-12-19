@@ -325,10 +325,12 @@ export const getSuggestedUsers = async (req, res) => {
         $sample: { size: 10 },
       },
     ]);
-    
+
     // Convert following array to string array for comparison
-    const followingIds = usersFollowedByYou.following.map((id) => id.toString());
-    
+    const followingIds = usersFollowedByYou.following.map((id) =>
+      id.toString()
+    );
+
     const filteredUsers = users.filter(
       (user) => !followingIds.includes(user._id.toString())
     );
@@ -356,11 +358,16 @@ export const searchUsers = async (req, res) => {
 
     const searchQuery = query.trim();
 
-    // Build search filter
+    // Escape special regex characters to prevent regex injection
+    // This allows partial matching while keeping it safe
+    const escapedQuery = searchQuery.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+    // Build search filter with partial matching (includes method equivalent)
+    // This will match if the search query appears anywhere in username or name
     const searchFilter = {
       $or: [
-        { username: { $regex: searchQuery, $options: "i" } },
-        { name: { $regex: searchQuery, $options: "i" } },
+        { username: { $regex: escapedQuery, $options: "i" } },
+        { name: { $regex: escapedQuery, $options: "i" } },
       ],
     };
 
@@ -370,6 +377,8 @@ export const searchUsers = async (req, res) => {
     }
 
     // Search users by username or name (case-insensitive, partial match)
+    // This will find users where the search query appears anywhere in the username or name
+    // Examples: "arun" will match "arunpravin125", "aru" will match "arunpravin125", etc.
     const users = await User.find(searchFilter)
       .select("-password -updatedAt")
       .limit(10) // Limit to 10 suggestions

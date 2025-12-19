@@ -16,6 +16,9 @@ import {
   ModalCloseButton,
   IconButton,
   useDisclosure,
+  Input,
+  InputGroup,
+  InputRightElement,
 } from "@chakra-ui/react";
 import React, { useEffect, useState, useRef } from "react";
 import toast from "react-hot-toast";
@@ -23,6 +26,7 @@ import { useRecoilValue } from "recoil";
 import userAtom from "../atoms/userAtom";
 import { FaPause, FaPlay } from "react-icons/fa";
 import { AiOutlineDelete, AiOutlineEdit } from "react-icons/ai";
+import { IoSend } from "react-icons/io5";
 
 const StoryViewer = ({ userId, isOpen, onClose }) => {
   const [stories, setStories] = useState([]);
@@ -31,9 +35,12 @@ const StoryViewer = ({ userId, isOpen, onClose }) => {
   const [loading, setLoading] = useState(true);
   const [isPaused, setIsPaused] = useState(false);
   const [pausedProgress, setPausedProgress] = useState(0);
+  const [replyText, setReplyText] = useState("");
+  const [isReplying, setIsReplying] = useState(false);
   const progressIntervalRef = useRef(null);
   const videoRef = useRef(null);
   const startTimeRef = useRef(null);
+  const replyInputRef = useRef(null);
   const bg = useColorModeValue("black", "gray.900");
   const currentUser = useRecoilValue(userAtom);
   const {
@@ -251,6 +258,13 @@ const StoryViewer = ({ userId, isOpen, onClose }) => {
     return () => window.removeEventListener("keydown", handleKeyPress);
   }, [isOpen, currentStoryIndex, stories.length, isPaused]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Reset reply text when story changes (must be before early return)
+  useEffect(() => {
+    if (stories.length > 0 && currentStoryIndex < stories.length) {
+      setReplyText("");
+    }
+  }, [currentStoryIndex, stories.length]);
+
   if (!isOpen || loading || stories.length === 0) {
     return null;
   }
@@ -325,6 +339,52 @@ const StoryViewer = ({ userId, isOpen, onClose }) => {
     }
   };
 
+  const handleReply = async (e) => {
+    e.stopPropagation();
+    if (!currentStory || !currentUser) {
+      toast.error("You must be logged in to reply");
+      return;
+    }
+
+    if (!replyText.trim()) {
+      return;
+    }
+
+    if (replyText.trim().length > 500) {
+      toast.error("Reply must be 500 characters or less");
+      return;
+    }
+
+    setIsReplying(true);
+    try {
+      const res = await fetch(`/api/stories/${currentStory.id}/reply`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ text: replyText.trim() }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok || data.error) {
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+
+      // Clear reply input
+      setReplyText("");
+      toast.success("Reply sent!");
+
+      // Optionally navigate to chat
+      // navigate("/chat");
+    } catch (error) {
+      console.error("Error replying to story:", error);
+      toast.error(error.message || "Failed to send reply");
+    } finally {
+      setIsReplying(false);
+    }
+  };
+
   return (
     <Box
       position="fixed"
@@ -366,18 +426,55 @@ const StoryViewer = ({ userId, isOpen, onClose }) => {
         ))}
       </Flex>
 
-      {/* Close Button */}
-      <CloseButton
+      {/* Close Button and Owner Actions */}
+      <Flex
         position="absolute"
         top={4}
         right={4}
         zIndex={10001}
-        color="white"
-        onClick={(e) => {
-          e.stopPropagation();
-          onClose();
-        }}
-      />
+        gap={2}
+        alignItems="center"
+      >
+        {isOwner && (
+          <Flex gap={2} data-control>
+            <IconButton
+              aria-label="Edit story"
+              icon={<AiOutlineEdit />}
+              size="md"
+              variant="solid"
+              colorScheme="blue"
+              bg="rgba(59, 130, 246, 0.9)"
+              color="white"
+              _hover={{ bg: "rgba(59, 130, 246, 1)" }}
+              onClick={(e) => {
+                e.stopPropagation();
+                handleEditCaption(e);
+              }}
+            />
+            <IconButton
+              aria-label="Delete story"
+              icon={<AiOutlineDelete />}
+              size="md"
+              variant="solid"
+              colorScheme="red"
+              bg="rgba(239, 68, 68, 0.9)"
+              color="white"
+              _hover={{ bg: "rgba(239, 68, 68, 1)" }}
+              onClick={(e) => {
+                e.stopPropagation();
+                onDeleteModalOpen();
+              }}
+            />
+          </Flex>
+        )}
+        <CloseButton
+          color="white"
+          onClick={(e) => {
+            e.stopPropagation();
+            onClose();
+          }}
+        />
+      </Flex>
 
       {/* Pause/Play Indicator */}
       {isPaused && (
@@ -447,55 +544,82 @@ const StoryViewer = ({ userId, isOpen, onClose }) => {
         </Box>
       </Flex>
 
-      {/* Caption + owner controls */}
-      <Box
-        position="absolute"
-        bottom={20}
-        left={4}
-        right={4}
-        zIndex={10001}
-        display="flex"
-        justifyContent="space-between"
-        alignItems="flex-end"
-        pointerEvents="none"
-      >
-        {currentStory.caption && (
+      {/* Caption */}
+      {currentStory.caption && (
+        <Box
+          position="absolute"
+          bottom={isOwner ? 80 : 20}
+          left={4}
+          right={4}
+          zIndex={10001}
+          pointerEvents="auto"
+        >
           <Text
             color="white"
             fontSize="sm"
             textShadow="0 1px 2px rgba(0,0,0,0.8)"
-            maxW="70%"
-            pointerEvents="auto"
+            maxW="100%"
           >
             {currentStory.caption}
           </Text>
-        )}
-        {isOwner && (
-          <Flex gap={2} pointerEvents="auto" data-control>
-            <IconButton
-              aria-label="Edit caption"
-              icon={<AiOutlineEdit />}
-              size="sm"
-              variant="ghost"
-              colorScheme="whiteAlpha"
-              color="white"
-              onClick={handleEditCaption}
-            />
-            <IconButton
-              aria-label="Delete story"
-              icon={<AiOutlineDelete />}
-              size="sm"
-              variant="ghost"
-              colorScheme="red"
-              color="white"
-              onClick={(e) => {
+        </Box>
+      )}
+
+      {/* Reply Input (only for non-owners) */}
+      {!isOwner && currentUser && (
+        <Box
+          position="absolute"
+          bottom={4}
+          left={4}
+          right={4}
+          zIndex={10001}
+          pointerEvents="auto"
+          data-control
+        >
+          <InputGroup
+            size="md"
+            bg="rgba(0,0,0,0.6)"
+            borderRadius="full"
+            backdropFilter="blur(10px)"
+            border="1px solid rgba(255,255,255,0.2)"
+          >
+            <Input
+              ref={replyInputRef}
+              value={replyText}
+              onChange={(e) => {
                 e.stopPropagation();
-                onDeleteModalOpen();
+                setReplyText(e.target.value);
               }}
+              onKeyPress={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  handleReply(e);
+                }
+              }}
+              onClick={(e) => e.stopPropagation()}
+              placeholder="Reply to story..."
+              color="white"
+              _placeholder={{ color: "whiteAlpha.700" }}
+              maxLength={500}
+              pr="3rem"
             />
-          </Flex>
-        )}
-      </Box>
+            <InputRightElement width="3rem">
+              <IconButton
+                aria-label="Send reply"
+                icon={<IoSend />}
+                size="sm"
+                colorScheme="blue"
+                variant="ghost"
+                color="white"
+                isLoading={isReplying}
+                onClick={handleReply}
+                isDisabled={!replyText.trim() || isReplying}
+              />
+            </InputRightElement>
+          </InputGroup>
+        </Box>
+      )}
 
       {/* Delete Confirmation Modal */}
       <Modal isOpen={isDeleteModalOpen} onClose={onDeleteModalClose} isCentered>

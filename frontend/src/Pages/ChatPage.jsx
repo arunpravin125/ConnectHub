@@ -9,11 +9,15 @@ import {
   SkeletonCircle,
   Text,
   useColorModeValue,
+  useDisclosure,
+  IconButton,
 } from "@chakra-ui/react";
 import React, { useEffect, useState, useRef } from "react";
 import Conversation from "../components/Conversation";
 import { GiConversation } from "react-icons/gi";
+import { FaUsers } from "react-icons/fa";
 import MessageContainer from "../components/MessageContainer";
+import CreateGroupModal from "../components/CreateGroupModal";
 import { toast } from "react-hot-toast";
 import {
   conversationAtom,
@@ -37,9 +41,13 @@ const ChatPage = () => {
   const [loadingSuggestions, setLoadingSuggestions] = useState(false);
   const searchTimeoutRef = useRef(null);
   const searchInputRef = useRef(null);
+  const {
+    isOpen: isCreateGroupOpen,
+    onOpen: onCreateGroupOpen,
+    onClose: onCreateGroupClose,
+  } = useDisclosure();
 
   const { socket, onlineUsers } = useSocket();
-  console.log("conversations:", conversations);
   const surfaceBg = useColorModeValue("whiteAlpha.900", "blackAlpha.400");
   const surfaceBorder = useColorModeValue("sand.200", "ink.700");
   useEffect(() => {
@@ -140,7 +148,6 @@ const ChatPage = () => {
         if (data.error) {
           throw new Error(data.error);
         }
-        console.log("getConversations:", data);
         setConversations(data);
       } catch (error) {
         console.log("error in getMessage:", error.message);
@@ -149,8 +156,10 @@ const ChatPage = () => {
         setLoading(false);
       }
     };
-    getConversation();
-  }, [setConversations]);
+    if (currentUser) {
+      getConversation();
+    }
+  }, [currentUser]); // Only fetch when user changes, not on every render
 
   const handleSelectUser = async (user) => {
     setSearch("");
@@ -252,14 +261,23 @@ const ChatPage = () => {
           backdropFilter="blur(10px)"
           boxShadow="0 20px 40px -30px rgba(0, 0, 0, 0.35)"
         >
-          <Text
-            fontWeight={700}
-            fontSize="sm"
-            color={useColorModeValue("ink.600", "whiteAlpha.700")}
-            mb={3}
-          >
-            Your conversations
-          </Text>
+          <Flex justifyContent="space-between" alignItems="center" mb={3}>
+            <Text
+              fontWeight={700}
+              fontSize="sm"
+              color={useColorModeValue("ink.600", "whiteAlpha.700")}
+            >
+              Your conversations
+            </Text>
+            <IconButton
+              icon={<FaUsers />}
+              size="sm"
+              variant="ghost"
+              colorScheme="brand"
+              aria-label="Create group"
+              onClick={onCreateGroupOpen}
+            />
+          </Flex>
           <Box position="relative" w="full" mb={4}>
             <form onSubmit={handleConversation}>
               <Flex alignItems={"center"} gap={2}>
@@ -373,22 +391,36 @@ const ChatPage = () => {
             ))}
           {!loading &&
             conversations
-              .filter(
-                (conversation) =>
-                  conversation &&
+              .filter((conversation) => {
+                if (!conversation) return false;
+                // For groups, check if it has members
+                if (conversation.type === "group") {
+                  return (
+                    conversation.members && conversation.members.length > 0
+                  );
+                }
+                // For direct chats, check participants
+                return (
                   conversation.participants &&
                   conversation.participants.length > 0 &&
                   conversation.participants[0] &&
                   conversation.participants[0]._id
-              )
+                );
+              })
               .map((conversation) => {
+                const isGroup = conversation.type === "group";
+                const participantId = isGroup
+                  ? null
+                  : conversation.participants?.[0]?._id;
                 return (
                   <Conversation
                     key={conversation._id}
                     conversation={conversation}
-                    isOnline={onlineUsers.includes(
-                      conversation.participants[0]._id
-                    )}
+                    isOnline={
+                      participantId
+                        ? onlineUsers.includes(participantId)
+                        : false
+                    }
                   />
                 );
               })}
@@ -422,6 +454,12 @@ const ChatPage = () => {
           {selectedConversation._id && <MessageContainer />}
         </Box>
       </Flex>
+
+      {/* Create Group Modal */}
+      <CreateGroupModal
+        isOpen={isCreateGroupOpen}
+        onClose={onCreateGroupClose}
+      />
     </Box>
   );
 };

@@ -1,6 +1,9 @@
 import Story from "../Models/storyModel.js";
 import User from "../Models/userModel.js";
+import Conversation from "../Models/conversationModel.js";
+import Message from "../Models/messageModel.js";
 import { v2 as cloudinary } from "cloudinary";
+import { getRecipiantSocketId, io } from "../socket/socket.js";
 
 /**
  * Create a new story
@@ -48,7 +51,10 @@ export const createStory = async (req, res) => {
         uploadOptions.chunk_size = 6000000;
       }
 
-      const uploadedResponse = await cloudinary.uploader.upload(media, uploadOptions);
+      const uploadedResponse = await cloudinary.uploader.upload(
+        media,
+        uploadOptions
+      );
       mediaUrl = uploadedResponse.secure_url;
 
       if (!mediaUrl) {
@@ -102,14 +108,25 @@ export const createStory = async (req, res) => {
 
 /**
  * Get stories feed - returns users with active stories
+ * Only shows stories from users the current user follows (plus their own stories)
  */
 export const getStoriesFeed = async (req, res) => {
   try {
     const userId = req.user._id;
     const now = new Date();
 
-    // Get all active stories (not expired)
+    // Get current user's following list
+    const currentUser = await User.findById(userId).select("following");
+    if (!currentUser) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    // Include current user's own ID and all users they follow
+    const allowedUserIds = [userId, ...(currentUser.following || [])];
+
+    // Get active stories only from users the current user follows (plus their own)
     const activeStories = await Story.find({
+      userId: { $in: allowedUserIds },
       expiresAt: { $gt: now },
       visibleTo: "public",
     })
@@ -188,23 +205,39 @@ export const getUserStories = async (req, res) => {
     const currentUserId = req.user._id;
     const now = new Date();
 
-    // Get active stories for this user
+    // Get active stories for this user with replies populated
     const stories = await Story.find({
       userId,
       expiresAt: { $gt: now },
       visibleTo: "public",
     })
+      .populate("replies.userId", "username name profilePic")
       .sort({ createdAt: 1 }) // Oldest first for sequential viewing
       .lean();
 
     // Format response with viewed status
     const formattedStories = stories.map((story) => {
-      const isViewedByMe = story.views && story.views.some(
-        (view) => {
-          const viewUserId = typeof view.userId === 'object' ? view.userId._id : view.userId;
+      const isViewedByMe =
+        story.views &&
+        story.views.some((view) => {
+          const viewUserId =
+            typeof view.userId === "object" ? view.userId._id : view.userId;
           return viewUserId.toString() === currentUserId.toString();
-        }
-      );
+        });
+
+      // Format replies with user info
+      const replies = story.replies || [];
+      const formattedReplies = replies.map((reply) => {
+        const replyUser = reply.userId;
+        return {
+          userId: replyUser?._id || replyUser || null,
+          username: replyUser?.username || "",
+          name: replyUser?.name || "",
+          profilePic: replyUser?.profilePic || "",
+          text: reply.text,
+          repliedAt: reply.repliedAt,
+        };
+      });
 
       return {
         id: story._id,
@@ -215,6 +248,8 @@ export const getUserStories = async (req, res) => {
         expiresAt: story.expiresAt,
         isViewedByMe: !!isViewedByMe,
         viewCount: story.views ? story.views.length : 0,
+        replyCount: formattedReplies.length,
+        replies: formattedReplies,
       };
     });
 
@@ -278,7 +313,9 @@ export const deleteStory = async (req, res) => {
     }
 
     if (story.userId.toString() !== userId.toString()) {
-      return res.status(403).json({ error: "Not authorized to delete this story" });
+      return res
+        .status(403)
+        .json({ error: "Not authorized to delete this story" });
     }
 
     // Attempt to delete media from Cloudinary (best-effort)
@@ -291,7 +328,10 @@ export const deleteStory = async (req, res) => {
           resource_type: story.mediaType === "video" ? "video" : "image",
         });
       } catch (e) {
-        console.warn("Failed to delete story media from Cloudinary:", e.message);
+        console.warn(
+          "Failed to delete story media from Cloudinary:",
+          e.message
+        );
       }
     }
 
@@ -320,7 +360,9 @@ export const updateStory = async (req, res) => {
     }
 
     if (story.userId.toString() !== userId.toString()) {
-      return res.status(403).json({ error: "Not authorized to edit this story" });
+      return res
+        .status(403)
+        .json({ error: "Not authorized to edit this story" });
     }
 
     if (caption && caption.length > 2200) {
@@ -349,3 +391,138 @@ export const updateStory = async (req, res) => {
   }
 };
 
+/**
+ * Reply to a story (sends a message to the story owner)
+ */
+export const replyToStory = async (req, res) => {
+  try {
+    const { id: storyId } = req.params;
+    const { text } = req.body;
+    const userId = req.user._id;
+
+    if (!text || text.trim() === "") {
+      return res.status(400).json({ error: "Reply text is required" });
+    }
+
+    if (text.length > 500) {
+      return res
+        .status(400)
+        .json({ error: "Reply must be 500 characters or less" });
+    }
+
+    const story = await Story.findById(storyId).populate(
+      "userId",
+      "username name profilePic"
+    );
+
+    if (!story) {
+      return res.status(404).json({ error: "Story not found" });
+    }
+
+    const storyOwnerId = story.userId._id || story.userId;
+
+    // Don't allow replying to own story
+    if (storyOwnerId.toString() === userId.toString()) {
+      return res
+        .status(400)
+        .json({ error: "You cannot reply to your own story" });
+    }
+
+    // Get current user info
+    const currentUser = await User.findById(userId).select(
+      "username name profilePic"
+    );
+
+    if (!currentUser) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    // Add reply to story
+    story.replies.push({
+      userId,
+      text: text.trim(),
+      repliedAt: new Date(),
+    });
+    await story.save();
+
+    // Find or create conversation between current user and story owner
+    let conversation = await Conversation.findOne({
+      participants: { $all: [userId, storyOwnerId] },
+    });
+
+    if (!conversation) {
+      conversation = new Conversation({
+        participants: [userId, storyOwnerId],
+      });
+      await conversation.save();
+    }
+
+    // Create message with story reply
+    const storyUrl = `${process.env.FRONTEND_URL || "http://localhost:3000"}/${
+      story.userId.username
+    }/story`;
+    const messageText = `Replied to your story: "${text.trim()}"\n\nView story: ${storyUrl}`;
+
+    const message = new Message({
+      sender: userId,
+      text: messageText,
+      conversationId: conversation._id,
+    });
+
+    await message.save();
+
+    // Update conversation last message
+    conversation.lastMessage = {
+      text: messageText,
+      sender: userId,
+    };
+    await conversation.save();
+
+    // Populate message for response
+    await message.populate("sender", "username name profilePic");
+
+    // Emit message to story owner via socket for real-time delivery
+    const ownerSocketId = getRecipiantSocketId(storyOwnerId.toString());
+    if (ownerSocketId) {
+      console.log(
+        `📤 Emitting story reply message to owner ${storyOwnerId} (socket: ${ownerSocketId})`
+      );
+      io.to(ownerSocketId).emit("newMessage", message);
+    } else {
+      console.warn(
+        `⚠️ Story owner ${storyOwnerId} not connected (socket not found)`
+      );
+    }
+
+    // Also emit to sender so they see the message immediately
+    const senderSocketId = getRecipiantSocketId(userId.toString());
+    if (senderSocketId) {
+      console.log(
+        `📤 Emitting story reply message to sender ${userId} (socket: ${senderSocketId})`
+      );
+      io.to(senderSocketId).emit("newMessage", message);
+    }
+
+    res.status(201).json({
+      success: true,
+      reply: {
+        userId: currentUser._id,
+        username: currentUser.username,
+        name: currentUser.name,
+        profilePic: currentUser.profilePic,
+        text: text.trim(),
+        repliedAt: story.replies[story.replies.length - 1].repliedAt,
+      },
+      message: {
+        _id: message._id,
+        text: message.text,
+        sender: message.sender,
+        conversationId: message.conversationId,
+        createdAt: message.createdAt,
+      },
+    });
+  } catch (error) {
+    console.error("Error in replyToStory:", error);
+    res.status(500).json({ error: error.message });
+  }
+};

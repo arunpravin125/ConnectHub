@@ -750,17 +750,36 @@ const Actions = ({ post, counts, viewerState }) => {
       </Flex>
 
       <Flex gap={2} alignItems={"center"}>
-        <Text color={useColorModeValue("ink.500", "whiteAlpha.600")} fontSize={"sm"}>
+        <Text
+          color={useColorModeValue("ink.500", "whiteAlpha.600")}
+          fontSize={"sm"}
+        >
           {replyCount} replies
         </Text>
-        <Box w={0.5} h={0.5} borderRadius={"full"} bg={useColorModeValue("sand.300", "ink.600")}></Box>
-        <Text color={useColorModeValue("ink.500", "whiteAlpha.600")} fontSize={"sm"}>
+        <Box
+          w={0.5}
+          h={0.5}
+          borderRadius={"full"}
+          bg={useColorModeValue("sand.300", "ink.600")}
+        ></Box>
+        <Text
+          color={useColorModeValue("ink.500", "whiteAlpha.600")}
+          fontSize={"sm"}
+        >
           {likeCount} likes
         </Text>
         {(repostCount > 0 || reposted) && (
           <>
-            <Box w={0.5} h={0.5} borderRadius={"full"} bg={useColorModeValue("sand.300", "ink.600")}></Box>
-            <Text color={useColorModeValue("ink.500", "whiteAlpha.600")} fontSize={"sm"}>
+            <Box
+              w={0.5}
+              h={0.5}
+              borderRadius={"full"}
+              bg={useColorModeValue("sand.300", "ink.600")}
+            ></Box>
+            <Text
+              color={useColorModeValue("ink.500", "whiteAlpha.600")}
+              fontSize={"sm"}
+            >
               {repostCount} reposts
             </Text>
           </>

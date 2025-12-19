@@ -74,7 +74,7 @@ const MessageInput = ({ setMessages }) => {
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
   const recordingTimerRef = useRef(null);
-  
+
   // Typing indicator state and refs
   const [isMeTyping, setIsMeTyping] = useState(false);
   const lastStartEmitRef = useRef(0);
@@ -87,7 +87,7 @@ const MessageInput = ({ setMessages }) => {
       const xhr = new XMLHttpRequest();
       const milestones = [10, 30, 50, 70, 90, 100];
       let lastMilestone = 0;
-      
+
       // Set timeout to 5 minutes (300000ms) for large audio files
       xhr.timeout = 300000; // 5 minutes
 
@@ -137,9 +137,13 @@ const MessageInput = ({ setMessages }) => {
       xhr.addEventListener("abort", () => {
         reject(new Error("Upload aborted"));
       });
-      
+
       xhr.addEventListener("timeout", () => {
-        reject(new Error("Upload timeout - file may be too large or connection too slow"));
+        reject(
+          new Error(
+            "Upload timeout - file may be too large or connection too slow"
+          )
+        );
       });
 
       xhr.open("POST", url);
@@ -151,29 +155,46 @@ const MessageInput = ({ setMessages }) => {
   // Helper function to get user-friendly error message for microphone access
   const getMicrophoneErrorMessage = (error) => {
     if (!error) return "Failed to access microphone";
-    
+
     const errorName = error.name || "";
     const errorMessage = error.message || "";
 
     // Check if it's a secure context issue
-    const isSecureContext = window.isSecureContext || 
-      window.location.protocol === 'https:' || 
-      window.location.hostname === 'localhost' || 
-      window.location.hostname === '127.0.0.1';
+    const isSecureContext =
+      window.isSecureContext ||
+      window.location.protocol === "https:" ||
+      window.location.hostname === "localhost" ||
+      window.location.hostname === "127.0.0.1";
 
     if (!isSecureContext) {
       return "Microphone access requires HTTPS. Please access this site via HTTPS or use localhost. For network access, you need to set up SSL/TLS.";
     }
 
-    if (errorName === "NotAllowedError" || errorName === "PermissionDeniedError") {
+    if (
+      errorName === "NotAllowedError" ||
+      errorName === "PermissionDeniedError"
+    ) {
       return "Microphone permission denied. Please allow microphone access in your browser settings and try again.";
-    } else if (errorName === "NotFoundError" || errorName === "DevicesNotFoundError") {
+    } else if (
+      errorName === "NotFoundError" ||
+      errorName === "DevicesNotFoundError"
+    ) {
       return "No microphone found. Please connect a microphone and try again.";
-    } else if (errorName === "NotReadableError" || errorName === "TrackStartError") {
+    } else if (
+      errorName === "NotReadableError" ||
+      errorName === "TrackStartError"
+    ) {
       return "Microphone is already in use by another application. Please close other apps using the microphone.";
-    } else if (errorName === "OverconstrainedError" || errorName === "ConstraintNotSatisfiedError") {
+    } else if (
+      errorName === "OverconstrainedError" ||
+      errorName === "ConstraintNotSatisfiedError"
+    ) {
       return "Microphone doesn't support required settings. Please try a different microphone.";
-    } else if (errorName === "TypeError" && (errorMessage.includes("getUserMedia") || errorMessage.includes("secure context"))) {
+    } else if (
+      errorName === "TypeError" &&
+      (errorMessage.includes("getUserMedia") ||
+        errorMessage.includes("secure context"))
+    ) {
       return "Microphone access requires HTTPS. Please access this site via HTTPS or use localhost.";
     } else {
       return `Failed to access microphone: ${errorMessage || errorName}`;
@@ -183,22 +204,25 @@ const MessageInput = ({ setMessages }) => {
   // Check if getUserMedia is available and if we're in a secure context
   const checkMediaDevicesSupport = () => {
     // Check if we're in a secure context (HTTPS or localhost)
-    const isSecureContext = window.isSecureContext || 
-      window.location.protocol === 'https:' || 
-      window.location.hostname === 'localhost' || 
-      window.location.hostname === '127.0.0.1';
+    const isSecureContext =
+      window.isSecureContext ||
+      window.location.protocol === "https:" ||
+      window.location.hostname === "localhost" ||
+      window.location.hostname === "127.0.0.1";
 
     if (!isSecureContext) {
       return {
         supported: false,
-        message: "Microphone access requires HTTPS. Please access this site via HTTPS or use localhost. For network access, you need to set up SSL/TLS."
+        message:
+          "Microphone access requires HTTPS. Please access this site via HTTPS or use localhost. For network access, you need to set up SSL/TLS.",
       };
     }
 
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       return {
         supported: false,
-        message: "Your browser doesn't support microphone access. Please use a modern browser (Chrome, Firefox, Safari, Edge)."
+        message:
+          "Your browser doesn't support microphone access. Please use a modern browser (Chrome, Firefox, Safari, Edge).",
       };
     }
     return { supported: true };
@@ -236,9 +260,11 @@ const MessageInput = ({ setMessages }) => {
           }
           return;
         }
-        
-        const audioBlob = new Blob(audioChunksRef.current, { type: "audio/webm;codecs=opus" });
-        
+
+        const audioBlob = new Blob(audioChunksRef.current, {
+          type: "audio/webm;codecs=opus",
+        });
+
         // Validate blob size (min 1KB, max 20MB)
         if (audioBlob.size < 1024) {
           console.error("Audio blob too small:", audioBlob.size);
@@ -251,7 +277,7 @@ const MessageInput = ({ setMessages }) => {
           }
           return;
         }
-        
+
         if (audioBlob.size > 20 * 1024 * 1024) {
           console.error("Audio blob too large:", audioBlob.size);
           toast.error("Recording too large. Maximum 20MB allowed.");
@@ -263,12 +289,16 @@ const MessageInput = ({ setMessages }) => {
           }
           return;
         }
-        
+
         const url = URL.createObjectURL(audioBlob);
         setAudioBlob(audioBlob);
         setAudioUrl(url);
         stream.getTracks().forEach((track) => track.stop());
-        console.log("Audio recorded successfully. Size:", audioBlob.size, "bytes");
+        console.log(
+          "Audio recorded successfully. Size:",
+          audioBlob.size,
+          "bytes"
+        );
       };
 
       mediaRecorder.start();
@@ -279,7 +309,7 @@ const MessageInput = ({ setMessages }) => {
       if (recordingTimerRef.current) {
         clearInterval(recordingTimerRef.current);
       }
-      
+
       let timeElapsed = 0;
       recordingTimerRef.current = setInterval(() => {
         timeElapsed += 1;
@@ -326,25 +356,35 @@ const MessageInput = ({ setMessages }) => {
 
   const handleSendMessage = async (e) => {
     e.preventDefault();
-    if (!messageText && !imageUrl && !videoUrl && !selectedFile && !audioBlob) return;
+    if (!messageText && !imageUrl && !videoUrl && !selectedFile && !audioBlob)
+      return;
     if (isSending || isProcessing) return;
-    
+
     setLoading(true);
     setIsSending(true);
-    
+
     try {
       let data;
-      
+
       // If file is selected, use FormData with progress tracking
       if (selectedFile) {
         setIsUploading(true);
         setUploadProgress(0);
-        
+
         const formData = new FormData();
-        formData.append("recipientId", selectedConversation.userId);
+        const isGroup =
+          selectedConversation.isGroup || selectedConversation.type === "group";
+        if (isGroup) {
+          formData.append(
+            "conversationId",
+            selectedConversation.conversationId || selectedConversation._id
+          );
+        } else {
+          formData.append("recipientId", selectedConversation.userId);
+        }
         formData.append("message", messageText);
         formData.append("file", selectedFile);
-        
+
         data = await uploadWithProgress(
           "/api/messages/",
           formData,
@@ -353,7 +393,7 @@ const MessageInput = ({ setMessages }) => {
             console.log(`Upload progress: ${progress}%`);
           }
         );
-        
+
         setIsUploading(false);
         setUploadProgress(0);
         setSelectedFile(null);
@@ -363,27 +403,42 @@ const MessageInput = ({ setMessages }) => {
         if (!audioBlob || audioBlob.size === 0) {
           throw new Error("Invalid audio recording. Please record again.");
         }
-        
+
         if (audioBlob.size > 20 * 1024 * 1024) {
           throw new Error("Audio file too large. Maximum 20MB allowed.");
         }
-        
+
         setIsUploading(true);
         setUploadProgress(0);
-        
+
         try {
           const formData = new FormData();
-          formData.append("recipientId", selectedConversation.userId);
+          const isGroup =
+            selectedConversation.isGroup ||
+            selectedConversation.type === "group";
+          if (isGroup) {
+            formData.append(
+              "conversationId",
+              selectedConversation.conversationId || selectedConversation._id
+            );
+          } else {
+            formData.append("recipientId", selectedConversation.userId);
+          }
           formData.append("message", messageText || "");
-          
+
           // Create a File object with proper MIME type
-          const audioFile = new File([audioBlob], "audio.webm", { 
-            type: "audio/webm;codecs=opus" 
+          const audioFile = new File([audioBlob], "audio.webm", {
+            type: "audio/webm;codecs=opus",
           });
           formData.append("file", audioFile);
-          
-          console.log("Sending audio file. Size:", audioFile.size, "Type:", audioFile.type);
-          
+
+          console.log(
+            "Sending audio file. Size:",
+            audioFile.size,
+            "Type:",
+            audioFile.type
+          );
+
           data = await uploadWithProgress(
             "/api/messages/",
             formData,
@@ -392,7 +447,7 @@ const MessageInput = ({ setMessages }) => {
               console.log(`Upload progress: ${progress}%`);
             }
           );
-          
+
           setIsUploading(false);
           setUploadProgress(0);
           setAudioBlob(null);
@@ -408,17 +463,29 @@ const MessageInput = ({ setMessages }) => {
         }
       } else {
         // Use JSON for base64 images/videos (legacy support)
+        const isGroup =
+          selectedConversation.isGroup || selectedConversation.type === "group";
+        const body = isGroup
+          ? {
+              conversationId:
+                selectedConversation.conversationId || selectedConversation._id,
+              message: messageText,
+              img: imageUrl || null,
+              video: videoUrl || null,
+            }
+          : {
+              recipientId: selectedConversation.userId,
+              message: messageText,
+              img: imageUrl || null,
+              video: videoUrl || null,
+            };
+
         const res = await fetch("/api/messages/", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({
-            recipientId: selectedConversation.userId,
-            message: messageText,
-            img: imageUrl || null,
-            video: videoUrl || null,
-          }),
+          body: JSON.stringify(body),
         });
         data = await res.json();
       }
@@ -445,7 +512,17 @@ const MessageInput = ({ setMessages }) => {
             return {
               ...conversation,
               lastMessage: {
-                text: messageText || (data.img ? "📷 Image" : data.video ? "🎥 Video" : data.audio ? "🎤 Audio" : data.fileName ? `📎 ${data.fileName}` : ""),
+                text:
+                  messageText ||
+                  (data.img
+                    ? "📷 Image"
+                    : data.video
+                    ? "🎥 Video"
+                    : data.audio
+                    ? "🎤 Audio"
+                    : data.fileName
+                    ? `📎 ${data.fileName}`
+                    : ""),
                 sender: data.sender,
               },
             };
@@ -513,7 +590,7 @@ const MessageInput = ({ setMessages }) => {
     if (!socket || !selectedConversation?._id) return;
 
     const chatId = selectedConversation._id;
-    
+
     // Leave previous chat room if switching
     if (currentChatIdRef.current && currentChatIdRef.current !== chatId) {
       socket.emit("chat:leave", { chatId: currentChatIdRef.current });
@@ -550,12 +627,12 @@ const MessageInput = ({ setMessages }) => {
   // Typing indicator handler
   const startTyping = () => {
     if (!socket || !selectedConversation?._id) return;
-    
+
     const chatId = selectedConversation._id;
     const now = Date.now();
-    
+
     // Emit typing_start only if not already typing OR if last emit > 2.5s
-    if (!isMeTyping || (now - lastStartEmitRef.current > 2500)) {
+    if (!isMeTyping || now - lastStartEmitRef.current > 2500) {
       socket.emit("chat:typing_start", { chatId });
       lastStartEmitRef.current = now;
       setIsMeTyping(true);
@@ -576,14 +653,14 @@ const MessageInput = ({ setMessages }) => {
 
   const stopTyping = () => {
     if (!socket || !selectedConversation?._id || !isMeTyping) return;
-    
+
     const chatId = selectedConversation._id;
-    
+
     if (stopTimerRef.current) {
       clearTimeout(stopTimerRef.current);
       stopTimerRef.current = null;
     }
-    
+
     socket.emit("chat:typing_stop", { chatId });
     setIsMeTyping(false);
   };
@@ -606,31 +683,8 @@ const MessageInput = ({ setMessages }) => {
     };
   }, [socket, messageText, selectedConversation?._id]);
 
-  // Listen for typing indicators from others
-  useEffect(() => {
-    if (!socket) return;
-
-    const handleCurrentTyping = ({ typing }) => {
-      console.log("📝 Typing indicator received:", typing);
-      setTyping(typing);
-    };
-
-    const handleCurrentUserId = ({ conversationId }) => {
-      console.log("👤 Current user ID received for conversation:", conversationId);
-      if (selectedConversation?._id == conversationId) {
-        setToUser(conversationId);
-      }
-    };
-
-    socket.on("currentTyping", handleCurrentTyping);
-    socket.on("currentUserId", handleCurrentUserId);
-
-    return () => {
-      socket.off("currentTyping", handleCurrentTyping);
-      socket.off("currentUserId", handleCurrentUserId);
-    };
-  }, [socket, selectedConversation?._id, setTyping, setToUser]);
-
+  // Note: Typing indicators from other users are handled in MessageContainer
+  // This component only emits typing events
 
   // Cleanup recording on unmount
   useEffect(() => {
@@ -833,7 +887,8 @@ const MessageInput = ({ setMessages }) => {
                     <Box flex={1}>
                       <Text fontWeight="semibold">Voice Message</Text>
                       <Text fontSize="xs" color="gray.500">
-                        {formatTime(recordingTime)} • {(audioBlob?.size / 1024).toFixed(2)} KB
+                        {formatTime(recordingTime)} •{" "}
+                        {(audioBlob?.size / 1024).toFixed(2)} KB
                       </Text>
                     </Box>
                   </Flex>
@@ -841,8 +896,16 @@ const MessageInput = ({ setMessages }) => {
                 </Box>
                 {isUploading && (
                   <Box w="full" p={3} bg="gray.50" borderRadius="md">
-                    <Flex justifyContent="space-between" mb={2} alignItems="center">
-                      <Text fontSize="sm" color="gray.700" fontWeight="semibold">
+                    <Flex
+                      justifyContent="space-between"
+                      mb={2}
+                      alignItems="center"
+                    >
+                      <Text
+                        fontSize="sm"
+                        color="gray.700"
+                        fontWeight="semibold"
+                      >
                         📤 Uploading...
                       </Text>
                       <Text
@@ -898,8 +961,16 @@ const MessageInput = ({ setMessages }) => {
                 </Box>
                 {isUploading && (
                   <Box w="full" p={3} bg="gray.50" borderRadius="md">
-                    <Flex justifyContent="space-between" mb={2} alignItems="center">
-                      <Text fontSize="sm" color="gray.700" fontWeight="semibold">
+                    <Flex
+                      justifyContent="space-between"
+                      mb={2}
+                      alignItems="center"
+                    >
+                      <Text
+                        fontSize="sm"
+                        color="gray.700"
+                        fontWeight="semibold"
+                      >
                         📤 Uploading...
                       </Text>
                       <Text

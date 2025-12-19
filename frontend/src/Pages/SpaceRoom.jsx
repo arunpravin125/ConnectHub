@@ -33,6 +33,10 @@ const SpaceRoom = () => {
   const [audioEnabled, setAudioEnabled] = useState(false);
   const [audioStatus, setAudioStatus] = useState("idle"); // idle, connecting, connected, failed
   const [connectionQuality, setConnectionQuality] = useState("good"); // good, poor
+  const [connectionProgress, setConnectionProgress] = useState({
+    total: 0,
+    connected: 0,
+  }); // Track connection progress
 
   // Recording refs
   const mediaRecorderRef = useRef(null);
@@ -79,19 +83,78 @@ const SpaceRoom = () => {
 
   // Audio health check: verify listeners have remote tracks
   useEffect(() => {
-    if (!isSpeaker && space?.status === "live" && audioStatus === "connecting") {
-      const healthCheckTimeout = setTimeout(() => {
-        const hasRemoteTracks = remoteStreams.some(
-          (rs) => rs.stream && rs.stream.getAudioTracks().length > 0
-        );
-        
-        if (!hasRemoteTracks && remoteStreams.length === 0) {
-          if (DEBUG) {
-            console.log("[WebRTC] Health check: No remote tracks after 5s, triggering renegotiation");
+    if (!isSpeaker && space?.status === "live") {
+      const healthCheckInterval = setInterval(() => {
+        // Check all audio elements
+        let hasPlayingAudio = false;
+        audioElementsRef.current.forEach((audioEl, userId) => {
+          if (audioEl.srcObject) {
+            const tracks = audioEl.srcObject.getAudioTracks();
+            const hasEnabledTracks = tracks.some(
+              (t) => t.enabled && t.readyState === "live"
+            );
+
+            if (DEBUG && hasEnabledTracks) {
+              console.log(`[WebRTC] Health check - User ${userId}:`, {
+                playing: !audioEl.paused,
+                muted: audioEl.muted,
+                volume: audioEl.volume,
+                tracks: tracks.length,
+                enabledTracks: tracks.filter((t) => t.enabled).length,
+              });
+            }
+
+            if (hasEnabledTracks && !audioEl.paused && !audioEl.muted) {
+              hasPlayingAudio = true;
+            } else if (hasEnabledTracks && (audioEl.paused || audioEl.muted)) {
+              // Try to play if we have tracks but audio is paused/muted
+              if (DEBUG)
+                console.log(
+                  `[WebRTC] Attempting to resume audio for ${userId}`
+                );
+              audioEl.muted = false;
+              audioEl.play().catch((err) => {
+                if (DEBUG)
+                  console.error(`[WebRTC] Failed to resume audio:`, err);
+              });
+            }
           }
-          
-          // Try to reconnect to all speakers
-          if (space) {
+        });
+
+        // If we have remote streams but no playing audio, try to reconnect
+        if (
+          remoteStreams.length > 0 &&
+          !hasPlayingAudio &&
+          audioStatus === "connecting"
+        ) {
+          if (DEBUG) {
+            console.log(
+              "[WebRTC] Health check: Have streams but no playing audio, checking connections"
+            );
+          }
+
+          // Check connection states
+          let hasConnectedPeers = false;
+          peerConnectionsRef.current.forEach((pc, userId) => {
+            if (pc.connectionState === "connected") {
+              hasConnectedPeers = true;
+            } else if (
+              pc.connectionState === "failed" ||
+              pc.connectionState === "disconnected"
+            ) {
+              if (DEBUG)
+                console.log(
+                  `[WebRTC] Reconnecting to ${userId} (health check)`
+                );
+              closePeerConnection(userId);
+              if (space?.status === "live") {
+                setupPeerConnection(userId);
+              }
+            }
+          });
+
+          if (!hasConnectedPeers && space) {
+            // Reconnect to all speakers
             const speakers = (space.speakers || []).filter(
               (s) => (s._id || s).toString() !== user._id.toString()
             );
@@ -102,9 +165,9 @@ const SpaceRoom = () => {
             });
           }
         }
-      }, 5000); // 5 second health check
+      }, 5000); // Check every 5 seconds
 
-      return () => clearTimeout(healthCheckTimeout);
+      return () => clearInterval(healthCheckInterval);
     }
   }, [isSpeaker, space, audioStatus, remoteStreams, user._id]);
 
@@ -148,19 +211,22 @@ const SpaceRoom = () => {
   const setupSocketListeners = () => {
     if (!socket) return;
 
-    socket.on("space:recordingStatus", ({ spaceId: sid, isRecording: recording, recordingId: rid }) => {
-      if (sid === spaceId) {
-        setIsRecording(recording);
-        setRecordingId(rid || null);
-        if (rid) {
-          recordingIdRef.current = rid; // Update ref as well
-        }
-        if (!recording && mediaRecorderRef.current) {
-          // Stop recording if server says to stop
-          handleStopRecording();
+    socket.on(
+      "space:recordingStatus",
+      ({ spaceId: sid, isRecording: recording, recordingId: rid }) => {
+        if (sid === spaceId) {
+          setIsRecording(recording);
+          setRecordingId(rid || null);
+          if (rid) {
+            recordingIdRef.current = rid; // Update ref as well
+          }
+          if (!recording && mediaRecorderRef.current) {
+            // Stop recording if server says to stop
+            handleStopRecording();
+          }
         }
       }
-    });
+    );
 
     socket.on("space:statusChanged", ({ spaceId: sid, status }) => {
       if (sid === spaceId) {
@@ -187,7 +253,8 @@ const SpaceRoom = () => {
 
     socket.on("space:participantJoined", ({ spaceId: sid, userId, role }) => {
       if (sid === spaceId && userId !== user._id) {
-        if (DEBUG) console.log(`[WebRTC] Participant joined: ${userId} as ${role}`);
+        if (DEBUG)
+          console.log(`[WebRTC] Participant joined: ${userId} as ${role}`);
         // Refresh space to get updated participant list
         fetchSpace();
       }
@@ -225,13 +292,13 @@ const SpaceRoom = () => {
     if (socket) {
       socket.emit("space:leave", { spaceId });
     }
-    
+
     // Close all peer connections
     peerConnectionsRef.current.forEach((pc, userId) => {
       closePeerConnection(userId);
     });
     peerConnectionsRef.current.clear();
-    
+
     // Stop local tracks
     if (localStream) {
       localStream.getTracks().forEach((track) => track.stop());
@@ -240,7 +307,7 @@ const SpaceRoom = () => {
       localAudioTrackRef.current.stop();
       localAudioTrackRef.current = null;
     }
-    
+
     // Clean up audio elements
     audioElementsRef.current.forEach((audioEl) => {
       if (audioEl.srcObject) {
@@ -249,30 +316,36 @@ const SpaceRoom = () => {
       audioEl.remove();
     });
     audioElementsRef.current.clear();
-    
+
     // Clean up recording
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+    if (
+      mediaRecorderRef.current &&
+      mediaRecorderRef.current.state !== "inactive"
+    ) {
       mediaRecorderRef.current.stop();
     }
     if (recordingIntervalRef.current) {
       clearInterval(recordingIntervalRef.current);
     }
-    
+
     // Clear recording ID ref
     recordingIdRef.current = null;
-    
+
     pendingIceCandidatesRef.current.clear();
   };
 
   // ========== WebRTC Functions ==========
-  
+
   // Create RTCPeerConnection with proper configuration
   const createPeerConnection = (targetUserId) => {
-    if (DEBUG) console.log(`[WebRTC] Creating peer connection to ${targetUserId}`);
-    
+    if (DEBUG)
+      console.log(`[WebRTC] Creating peer connection to ${targetUserId}`);
+
     const pc = new RTCPeerConnection({
       iceServers: iceServersRef.current,
       iceCandidatePoolSize: 10,
+      // Optimize for faster connection
+      iceTransportPolicy: "all", // Try both relay and direct connections
     });
 
     // Connection state monitoring
@@ -282,13 +355,45 @@ const SpaceRoom = () => {
           `[WebRTC] Connection state (${targetUserId}):`,
           pc.connectionState
         );
+
+        // Log transceiver states
+        const transceivers = pc.getTransceivers();
+        transceivers.forEach((t, idx) => {
+          console.log(`[WebRTC] Transceiver ${idx}:`, {
+            direction: t.direction,
+            kind: t.receiver.track?.kind || "none",
+            enabled: t.receiver.track?.enabled,
+            readyState: t.receiver.track?.readyState,
+            muted: t.receiver.track?.muted,
+          });
+        });
+
+        // Log senders (for speakers)
+        if (isSpeaker) {
+          const senders = pc.getSenders();
+          senders.forEach((s, idx) => {
+            console.log(`[WebRTC] Sender ${idx}:`, {
+              track: s.track?.id || "none",
+              enabled: s.track?.enabled,
+              readyState: s.track?.readyState,
+            });
+          });
+        }
       }
-      
-      if (pc.connectionState === "failed" || pc.connectionState === "disconnected") {
+
+      if (
+        pc.connectionState === "failed" ||
+        pc.connectionState === "disconnected"
+      ) {
         setConnectionQuality("poor");
         // Try to reconnect after 3 seconds
         setTimeout(() => {
-          if (pc.connectionState === "failed" || pc.connectionState === "disconnected") {
+          const currentPc = peerConnectionsRef.current.get(targetUserId);
+          if (
+            currentPc &&
+            (currentPc.connectionState === "failed" ||
+              currentPc.connectionState === "disconnected")
+          ) {
             if (DEBUG) console.log(`[WebRTC] Reconnecting to ${targetUserId}`);
             closePeerConnection(targetUserId);
             if (space?.status === "live") {
@@ -298,10 +403,114 @@ const SpaceRoom = () => {
         }, 3000);
       } else if (pc.connectionState === "connected") {
         setConnectionQuality("good");
-        setAudioStatus("connected");
+
+        // For speakers: verify we're sending audio
+        if (isSpeaker) {
+          const senders = pc.getSenders();
+          const hasActiveSender = senders.some(
+            (s) =>
+              s.track &&
+              s.track.kind === "audio" &&
+              s.track.enabled &&
+              s.track.readyState === "live"
+          );
+          if (DEBUG) {
+            console.log(
+              `[WebRTC] Speaker connected to ${targetUserId}, sending audio: ${hasActiveSender}`,
+              {
+                senders: senders.length,
+                tracks: senders.map((s) => ({
+                  kind: s.track?.kind,
+                  enabled: s.track?.enabled,
+                  readyState: s.track?.readyState,
+                  muted: s.track?.muted,
+                })),
+              }
+            );
+          }
+          if (!hasActiveSender) {
+            console.warn(
+              `[WebRTC] Speaker has no active audio track to send to ${targetUserId}`
+            );
+            // Try to re-add track
+            if (localAudioTrackRef.current && localStream) {
+              const existingSender = senders.find(
+                (s) => s.track === localAudioTrackRef.current
+              );
+              if (!existingSender) {
+                console.log(
+                  `[WebRTC] Re-adding audio track to ${targetUserId}`
+                );
+                pc.addTrack(localAudioTrackRef.current, localStream);
+              }
+            }
+          }
+        }
+
+        // For listeners: check if we're receiving audio
+        if (!isSpeaker) {
+          const receivers = pc.getReceivers();
+          const hasAudioTrack = receivers.some(
+            (r) =>
+              r.track &&
+              r.track.kind === "audio" &&
+              r.track.enabled &&
+              r.track.readyState === "live"
+          );
+          if (DEBUG) {
+            console.log(
+              `[WebRTC] Listener connected to ${targetUserId}, receiving audio: ${hasAudioTrack}`,
+              {
+                receivers: receivers.length,
+                tracks: receivers.map((r) => ({
+                  kind: r.track?.kind,
+                  enabled: r.track?.enabled,
+                  readyState: r.track?.readyState,
+                  muted: r.track?.muted,
+                })),
+              }
+            );
+          }
+          if (hasAudioTrack) {
+            setAudioStatus("connected");
+          } else {
+            // Wait a shorter time for track to arrive (reduced from 2000ms to 1000ms)
+            setTimeout(() => {
+              const stillConnected =
+                peerConnectionsRef.current.get(targetUserId);
+              if (
+                stillConnected &&
+                stillConnected.connectionState === "connected"
+              ) {
+                const receivers = stillConnected.getReceivers();
+                const hasTrack = receivers.some(
+                  (r) =>
+                    r.track &&
+                    r.track.kind === "audio" &&
+                    r.track.enabled &&
+                    r.track.readyState === "live"
+                );
+                if (!hasTrack) {
+                  console.warn(
+                    `[WebRTC] No audio track received from ${targetUserId} after connection`
+                  );
+                  setAudioStatus("idle");
+                } else {
+                  setAudioStatus("connected");
+                }
+              }
+            }, 1000); // Reduced from 2000ms
+          }
+        }
+      } else if (pc.connectionState === "connecting") {
+        setAudioStatus("connecting");
+      } else if (pc.connectionState === "checking") {
+        // ICE checking - connection is in progress
+        setAudioStatus("connecting");
       }
     };
 
+    // ICE connection state monitoring for faster feedback
     pc.oniceconnectionstatechange = () => {
       if (DEBUG) {
         console.log(
@@ -309,7 +518,57 @@ const SpaceRoom = () => {
           pc.iceConnectionState
         );
       }
+
+      // Update status based on ICE state for faster feedback
+      if (pc.iceConnectionState === "checking") {
+        setAudioStatus("connecting");
+      } else if (
+        pc.iceConnectionState === "connected" ||
+        pc.iceConnectionState === "completed"
+      ) {
+        setConnectionQuality("good");
+        if (!isSpeaker) {
+          // For listeners, immediately check for tracks
+          const receivers = pc.getReceivers();
+          const hasTrack = receivers.some(
+            (r) =>
+              r.track &&
+              r.track.kind === "audio" &&
+              r.track.enabled &&
+              r.track.readyState === "live"
+          );
+          if (hasTrack) {
+            setAudioStatus("connected");
+          } else {
+            // Wait a short time for track to arrive
+            setTimeout(() => {
+              const receivers = pc.getReceivers();
+              const hasTrack = receivers.some(
+                (r) =>
+                  r.track &&
+                  r.track.kind === "audio" &&
+                  r.track.enabled &&
+                  r.track.readyState === "live"
+              );
+              if (hasTrack) {
+                setAudioStatus("connected");
+              }
+            }, 500); // Reduced from 1000ms to 500ms for faster feedback
+          }
+        } else {
+          // Speaker - connection is good
+          setAudioStatus("connected");
+        }
+      } else if (
+        pc.iceConnectionState === "failed" ||
+        pc.iceConnectionState === "disconnected"
+      ) {
+        setConnectionQuality("poor");
+        // Will try to reconnect via onconnectionstatechange handler
+      }
     };
+
+    // Note: ICE connection state monitoring moved to onconnectionstatechange handler above
 
     pc.onsignalingstatechange = () => {
       if (DEBUG) {
@@ -331,7 +590,7 @@ const SpaceRoom = () => {
             event.candidate.candidate.substring(0, 50)
           );
         }
-        
+
         // Send ICE candidate via signaling
         if (socket && pc.signalingState !== "closed") {
           socket.emit("space:webrtc:ice", {
@@ -341,7 +600,8 @@ const SpaceRoom = () => {
           });
         }
       } else {
-        if (DEBUG) console.log(`[WebRTC] ICE gathering complete for ${targetUserId}`);
+        if (DEBUG)
+          console.log(`[WebRTC] ICE gathering complete for ${targetUserId}`);
       }
     };
 
@@ -354,11 +614,68 @@ const SpaceRoom = () => {
           enabled: event.track.enabled,
           readyState: event.track.readyState,
           streams: event.streams.length,
+          trackEnabled: event.track.enabled,
+          trackMuted: event.track.muted,
+          transceiver: event.transceiver?.direction,
         });
       }
 
-      const [remoteStream] = event.streams;
+      // Only handle audio tracks
+      if (event.track.kind !== "audio") {
+        if (DEBUG)
+          console.log(`[WebRTC] Ignoring non-audio track from ${targetUserId}`);
+        return;
+      }
+
+      // Get the track and stream
+      const track = event.track;
+      let remoteStream = null;
+
+      // Prefer stream from event, fallback to creating new stream
+      if (event.streams && event.streams.length > 0) {
+        remoteStream = event.streams[0];
+      } else {
+        // Create a new stream with the track
+        remoteStream = new MediaStream([track]);
+        if (DEBUG)
+          console.log(
+            `[WebRTC] Created new stream for track from ${targetUserId}`
+          );
+      }
+
+      // Ensure track is enabled
+      if (track && !track.enabled) {
+        track.enabled = true;
+        if (DEBUG) console.log(`[WebRTC] Enabled track for ${targetUserId}`);
+      }
+
+      // Verify track is live
+      if (track.readyState !== "live") {
+        console.warn(
+          `[WebRTC] Track from ${targetUserId} is not live yet, readyState: ${track.readyState}`
+        );
+        // Wait for track to become live
+        track.onended = () => {
+          console.log(`[WebRTC] Track from ${targetUserId} ended`);
+        };
+        track.onmute = () => {
+          console.warn(`[WebRTC] Track from ${targetUserId} was muted`);
+        };
+        track.onunmute = () => {
+          console.log(`[WebRTC] Track from ${targetUserId} was unmuted`);
+        };
+      }
+
       if (remoteStream && remoteStream.getAudioTracks().length > 0) {
+        // Ensure all audio tracks are enabled
+        remoteStream.getAudioTracks().forEach((audioTrack) => {
+          if (!audioTrack.enabled) {
+            audioTrack.enabled = true;
+            if (DEBUG)
+              console.log(`[WebRTC] Enabled audio track: ${audioTrack.id}`);
+          }
+        });
+
         // Update remote streams state
         setRemoteStreams((prev) => {
           const filtered = prev.filter((s) => s.userId !== targetUserId);
@@ -373,42 +690,169 @@ const SpaceRoom = () => {
           audioEl.playsInline = true;
           audioEl.muted = false;
           audioEl.volume = 1.0;
+          audioEl.setAttribute("playsinline", "true");
+          audioEl.setAttribute("webkit-playsinline", "true");
           audioElementsRef.current.set(targetUserId, audioEl);
           document.body.appendChild(audioEl);
+
+          // Add event listeners for debugging
+          audioEl.addEventListener("loadedmetadata", () => {
+            if (DEBUG)
+              console.log(`[WebRTC] Audio metadata loaded for ${targetUserId}`);
+          });
+          audioEl.addEventListener("canplay", () => {
+            if (DEBUG)
+              console.log(`[WebRTC] Audio can play for ${targetUserId}`);
+          });
+          audioEl.addEventListener("play", () => {
+            if (DEBUG)
+              console.log(`[WebRTC] Audio started playing for ${targetUserId}`);
+            setAudioEnabled(true);
+            setAudioStatus("connected");
+          });
+          audioEl.addEventListener("pause", () => {
+            if (DEBUG) console.log(`[WebRTC] Audio paused for ${targetUserId}`);
+          });
+          audioEl.addEventListener("error", (e) => {
+            console.error(`[WebRTC] Audio error for ${targetUserId}:`, e);
+          });
         }
 
+        // Set the stream (replace if already set to ensure fresh stream)
+        if (audioEl.srcObject) {
+          // Stop old tracks
+          audioEl.srcObject.getTracks().forEach((t) => t.stop());
+        }
         audioEl.srcObject = remoteStream;
-        
-        // Handle autoplay
+
+        // Ensure audio element is not muted and volume is set
+        audioEl.muted = false;
+        audioEl.volume = 1.0;
+
+        // Verify stream has tracks
+        const streamTracks = remoteStream.getAudioTracks();
+        if (DEBUG) {
+          console.log(`[WebRTC] Setting audio element for ${targetUserId}:`, {
+            tracks: streamTracks.length,
+            tracksEnabled: streamTracks.filter((t) => t.enabled).length,
+            tracksLive: streamTracks.filter((t) => t.readyState === "live")
+              .length,
+          });
+        }
+
+        // Wait a shorter time for stream to be ready if track is not live yet
+        if (streamTracks.some((t) => t.readyState !== "live")) {
+          if (DEBUG)
+            console.log(
+              `[WebRTC] Waiting for tracks to become live from ${targetUserId}`
+            );
+          const checkInterval = setInterval(() => {
+            const allLive = streamTracks.every((t) => t.readyState === "live");
+            if (allLive || audioEl.readyState >= 2) {
+              // HAVE_CURRENT_DATA or higher
+              clearInterval(checkInterval);
+              audioEl.play().catch((err) => {
+                if (DEBUG)
+                  console.error(`[WebRTC] Play failed after wait:`, err);
+              });
+            }
+          }, 50); // Check more frequently (50ms instead of 100ms)
+          setTimeout(() => clearInterval(checkInterval), 2000); // Reduced from 5 seconds to 2 seconds
+        }
+
+        // Try to play immediately
         const playPromise = audioEl.play();
         if (playPromise !== undefined) {
           playPromise
             .then(() => {
-              if (DEBUG) console.log(`[WebRTC] Audio playing for ${targetUserId}`);
+              if (DEBUG)
+                console.log(`[WebRTC] Audio playing for ${targetUserId}`);
               setAudioEnabled(true);
               setAudioStatus("connected");
             })
             .catch((error) => {
-              if (DEBUG) console.error(`[WebRTC] Autoplay blocked for ${targetUserId}:`, error);
+              if (DEBUG) {
+                console.error(
+                  `[WebRTC] Autoplay blocked for ${targetUserId}:`,
+                  error
+                );
+                console.log(`[WebRTC] Audio element state:`, {
+                  muted: audioEl.muted,
+                  volume: audioEl.volume,
+                  paused: audioEl.paused,
+                  readyState: audioEl.readyState,
+                  srcObject: !!audioEl.srcObject,
+                });
+              }
               setAudioEnabled(false);
               setAudioStatus("autoplay-blocked");
             });
+        } else {
+          // Fallback: try playing after a short delay
+          setTimeout(() => {
+            audioEl.play().catch((err) => {
+              if (DEBUG)
+                console.error(
+                  `[WebRTC] Delayed play failed for ${targetUserId}:`,
+                  err
+                );
+            });
+          }, 100);
         }
+      } else {
+        console.warn(`[WebRTC] No audio tracks in stream from ${targetUserId}`);
       }
     };
 
     return pc;
   };
 
-  // Setup peer connection (speaker or listener)
+  // Setup peer connection (speaker or listener) with timeout
   const setupPeerConnection = async (targetUserId) => {
     if (peerConnectionsRef.current.has(targetUserId)) {
-      if (DEBUG) console.log(`[WebRTC] Peer connection to ${targetUserId} already exists`);
+      if (DEBUG)
+        console.log(
+          `[WebRTC] Peer connection to ${targetUserId} already exists`
+        );
       return;
     }
 
     const pc = createPeerConnection(targetUserId);
     peerConnectionsRef.current.set(targetUserId, pc);
+
+    // Add connection timeout (15 seconds)
+    const connectionTimeout = setTimeout(() => {
+      if (
+        pc.connectionState !== "connected" &&
+        pc.iceConnectionState !== "connected"
+      ) {
+        console.warn(`[WebRTC] Connection timeout for ${targetUserId}`);
+        closePeerConnection(targetUserId);
+        // Retry once after timeout
+        if (space?.status === "live") {
+          setTimeout(() => {
+            setupPeerConnection(targetUserId);
+          }, 2000);
+        }
+      }
+    }, 15000);
+
+    // Clear timeout when connected
+    const clearTimeoutOnConnect = () => {
+      if (
+        pc.connectionState === "connected" ||
+        pc.iceConnectionState === "connected"
+      ) {
+        clearTimeout(connectionTimeout);
+        pc.removeEventListener("connectionstatechange", clearTimeoutOnConnect);
+        pc.removeEventListener(
+          "iceconnectionstatechange",
+          clearTimeoutOnConnect
+        );
+      }
+    };
+    pc.addEventListener("connectionstatechange", clearTimeoutOnConnect);
+    pc.addEventListener("iceconnectionstatechange", clearTimeoutOnConnect);
 
     try {
       if (isSpeaker) {
@@ -416,28 +860,70 @@ const SpaceRoom = () => {
         if (!localAudioTrackRef.current && localStream) {
           const audioTrack = localStream.getAudioTracks()[0];
           if (audioTrack) {
+            // Ensure track is enabled
+            audioTrack.enabled = true;
             localAudioTrackRef.current = audioTrack;
-            pc.addTrack(audioTrack, localStream);
+            const sender = pc.addTrack(audioTrack, localStream);
+
+            // Set transceiver direction to sendonly for speakers
+            const transceiver = pc
+              .getTransceivers()
+              .find((t) => t.sender === sender);
+            if (transceiver) {
+              transceiver.direction = "sendonly";
+              if (DEBUG) {
+                console.log(
+                  `[WebRTC] Set transceiver direction to sendonly for ${targetUserId}`
+                );
+              }
+            }
+
             if (DEBUG) {
               console.log(`[WebRTC] Added audio track to ${targetUserId}:`, {
                 trackId: audioTrack.id,
                 enabled: audioTrack.enabled,
                 muted: audioTrack.muted,
                 readyState: audioTrack.readyState,
+                direction: transceiver?.direction,
               });
             }
+          } else {
+            console.error("[WebRTC] No audio track in local stream");
+            return;
           }
         } else if (localAudioTrackRef.current) {
-          pc.addTrack(localAudioTrackRef.current, localStream);
+          // Ensure track is enabled before adding
+          localAudioTrackRef.current.enabled = true;
+          const sender = pc.addTrack(localAudioTrackRef.current, localStream);
+
+          // Set transceiver direction to sendonly
+          const transceiver = pc
+            .getTransceivers()
+            .find((t) => t.sender === sender);
+          if (transceiver) {
+            transceiver.direction = "sendonly";
+          }
+
+          if (DEBUG) {
+            console.log(
+              `[WebRTC] Reused audio track for ${targetUserId}, direction: ${transceiver?.direction}`
+            );
+          }
         } else {
           console.error("[WebRTC] No local audio track available for speaker");
+          toast.error(
+            "Microphone not available. Please check your microphone permissions."
+          );
           return;
         }
 
-        // Create offer
-        const offer = await pc.createOffer();
+        // Create offer with sendonly constraint
+        const offer = await pc.createOffer({
+          offerToReceiveAudio: false,
+          offerToReceiveVideo: false,
+        });
         await pc.setLocalDescription(offer);
-        
+
         if (DEBUG) {
           console.log(`[WebRTC] Offer created for ${targetUserId}:`, {
             type: offer.type,
@@ -455,21 +941,26 @@ const SpaceRoom = () => {
       } else {
         // Listener: request audio track
         pc.addTransceiver("audio", { direction: "recvonly" });
-        
+
         if (DEBUG) {
-          console.log(`[WebRTC] Added recvonly transceiver for ${targetUserId}`);
+          console.log(
+            `[WebRTC] Added recvonly transceiver for ${targetUserId}`
+          );
         }
 
         // Create offer
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
-        
+
         if (DEBUG) {
-          console.log(`[WebRTC] Offer created (listener) for ${targetUserId}:`, {
-            type: offer.type,
-            hasAudio: offer.sdp.includes("m=audio"),
-            sdpLength: offer.sdp.length,
-          });
+          console.log(
+            `[WebRTC] Offer created (listener) for ${targetUserId}:`,
+            {
+              type: offer.type,
+              hasAudio: offer.sdp.includes("m=audio"),
+              sdpLength: offer.sdp.length,
+            }
+          );
         }
 
         // Send offer
@@ -482,7 +973,10 @@ const SpaceRoom = () => {
 
       setAudioStatus("connecting");
     } catch (error) {
-      console.error(`[WebRTC] Error setting up peer connection to ${targetUserId}:`, error);
+      console.error(
+        `[WebRTC] Error setting up peer connection to ${targetUserId}:`,
+        error
+      );
       closePeerConnection(targetUserId);
     }
   };
@@ -500,23 +994,52 @@ const SpaceRoom = () => {
 
     try {
       let pc = peerConnectionsRef.current.get(fromUserId);
-      
+
       if (!pc) {
         pc = createPeerConnection(fromUserId);
         peerConnectionsRef.current.set(fromUserId, pc);
 
-        // If we're a speaker, add our audio track
-        if (isSpeaker && localAudioTrackRef.current) {
-          pc.addTrack(localAudioTrackRef.current, localStream);
-        } else if (isSpeaker && localStream) {
-          const audioTrack = localStream.getAudioTracks()[0];
-          if (audioTrack) {
-            localAudioTrackRef.current = audioTrack;
-            pc.addTrack(audioTrack, localStream);
+        // If we're a speaker, add our audio track BEFORE setting remote description
+        if (isSpeaker) {
+          let trackToAdd = null;
+          if (localAudioTrackRef.current) {
+            trackToAdd = localAudioTrackRef.current;
+          } else if (localStream) {
+            const audioTrack = localStream.getAudioTracks()[0];
+            if (audioTrack) {
+              audioTrack.enabled = true;
+              localAudioTrackRef.current = audioTrack;
+              trackToAdd = audioTrack;
+            }
           }
-        } else if (!isSpeaker) {
-          // Listener: add recvonly transceiver
+
+          if (trackToAdd) {
+            const sender = pc.addTrack(trackToAdd, localStream);
+            // Set transceiver direction to sendonly
+            const transceiver = pc
+              .getTransceivers()
+              .find((t) => t.sender === sender);
+            if (transceiver) {
+              transceiver.direction = "sendonly";
+              if (DEBUG) {
+                console.log(
+                  `[WebRTC] Added track and set sendonly when handling offer from ${fromUserId}`
+                );
+              }
+            }
+          } else {
+            console.warn(
+              `[WebRTC] Speaker has no audio track to add when handling offer from ${fromUserId}`
+            );
+          }
+        } else {
+          // Listener: add recvonly transceiver BEFORE setting remote description
           pc.addTransceiver("audio", { direction: "recvonly" });
+          if (DEBUG) {
+            console.log(
+              `[WebRTC] Added recvonly transceiver when handling offer from ${fromUserId}`
+            );
+          }
         }
       }
 
@@ -524,7 +1047,8 @@ const SpaceRoom = () => {
       await pc.setRemoteDescription(new RTCSessionDescription(offer));
 
       // Process pending ICE candidates
-      const pendingCandidates = pendingIceCandidatesRef.current.get(fromUserId) || [];
+      const pendingCandidates =
+        pendingIceCandidatesRef.current.get(fromUserId) || [];
       for (const candidate of pendingCandidates) {
         try {
           await pc.addIceCandidate(new RTCIceCandidate(candidate));
@@ -535,8 +1059,25 @@ const SpaceRoom = () => {
       pendingIceCandidatesRef.current.delete(fromUserId);
 
       // Create answer
-      const answer = await pc.createAnswer();
+      // For speakers answering listeners: answer should be recvonly
+      // For listeners answering speakers: answer should be sendonly (but we're listener, so recvonly)
+      const answer = await pc.createAnswer({
+        offerToReceiveAudio: !isSpeaker, // Listeners want to receive, speakers don't
+        offerToReceiveVideo: false,
+      });
       await pc.setLocalDescription(answer);
+
+      // Verify transceiver directions after creating answer
+      if (DEBUG) {
+        const transceivers = pc.getTransceivers();
+        transceivers.forEach((t, idx) => {
+          console.log(
+            `[WebRTC] Transceiver ${idx} direction: ${t.direction}, kind: ${
+              t.receiver.track?.kind || "none"
+            }`
+          );
+        });
+      }
 
       if (DEBUG) {
         console.log(`[WebRTC] Answer created for ${fromUserId}:`, {
@@ -578,7 +1119,8 @@ const SpaceRoom = () => {
       await pc.setRemoteDescription(new RTCSessionDescription(answer));
 
       // Process pending ICE candidates
-      const pendingCandidates = pendingIceCandidatesRef.current.get(fromUserId) || [];
+      const pendingCandidates =
+        pendingIceCandidatesRef.current.get(fromUserId) || [];
       for (const candidate of pendingCandidates) {
         try {
           await pc.addIceCandidate(new RTCIceCandidate(candidate));
@@ -588,7 +1130,10 @@ const SpaceRoom = () => {
       }
       pendingIceCandidatesRef.current.delete(fromUserId);
     } catch (error) {
-      console.error(`[WebRTC] Error handling answer from ${fromUserId}:`, error);
+      console.error(
+        `[WebRTC] Error handling answer from ${fromUserId}:`,
+        error
+      );
     }
   };
 
@@ -615,7 +1160,10 @@ const SpaceRoom = () => {
         }
       }
     } catch (error) {
-      console.error(`[WebRTC] Error handling ICE candidate from ${fromUserId}:`, error);
+      console.error(
+        `[WebRTC] Error handling ICE candidate from ${fromUserId}:`,
+        error
+      );
     }
   };
 
@@ -632,7 +1180,8 @@ const SpaceRoom = () => {
     if (pc) {
       pc.close();
       peerConnectionsRef.current.delete(targetUserId);
-      if (DEBUG) console.log(`[WebRTC] Closed peer connection to ${targetUserId}`);
+      if (DEBUG)
+        console.log(`[WebRTC] Closed peer connection to ${targetUserId}`);
     }
 
     // Clean up audio element
@@ -647,7 +1196,7 @@ const SpaceRoom = () => {
 
     // Remove from remote streams
     setRemoteStreams((prev) => prev.filter((s) => s.userId !== targetUserId));
-    
+
     // Clear pending candidates
     pendingIceCandidatesRef.current.delete(targetUserId);
   };
@@ -705,29 +1254,46 @@ const SpaceRoom = () => {
   // Helper function to get user-friendly error message for microphone access
   const getMicrophoneErrorMessage = (error) => {
     if (!error) return "Failed to access microphone";
-    
+
     const errorName = error.name || "";
     const errorMessage = error.message || "";
 
     // Check if it's a secure context issue
-    const isSecureContext = window.isSecureContext || 
-      window.location.protocol === 'https:' || 
-      window.location.hostname === 'localhost' || 
-      window.location.hostname === '127.0.0.1';
+    const isSecureContext =
+      window.isSecureContext ||
+      window.location.protocol === "https:" ||
+      window.location.hostname === "localhost" ||
+      window.location.hostname === "127.0.0.1";
 
     if (!isSecureContext) {
       return "Microphone access requires HTTPS. Please access this site via HTTPS or use localhost. For network access, you need to set up SSL/TLS.";
     }
 
-    if (errorName === "NotAllowedError" || errorName === "PermissionDeniedError") {
+    if (
+      errorName === "NotAllowedError" ||
+      errorName === "PermissionDeniedError"
+    ) {
       return "Microphone permission denied. Please allow microphone access in your browser settings and try again.";
-    } else if (errorName === "NotFoundError" || errorName === "DevicesNotFoundError") {
+    } else if (
+      errorName === "NotFoundError" ||
+      errorName === "DevicesNotFoundError"
+    ) {
       return "No microphone found. Please connect a microphone and try again.";
-    } else if (errorName === "NotReadableError" || errorName === "TrackStartError") {
+    } else if (
+      errorName === "NotReadableError" ||
+      errorName === "TrackStartError"
+    ) {
       return "Microphone is already in use by another application. Please close other apps using the microphone.";
-    } else if (errorName === "OverconstrainedError" || errorName === "ConstraintNotSatisfiedError") {
+    } else if (
+      errorName === "OverconstrainedError" ||
+      errorName === "ConstraintNotSatisfiedError"
+    ) {
       return "Microphone doesn't support required settings. Please try a different microphone.";
-    } else if (errorName === "TypeError" && (errorMessage.includes("getUserMedia") || errorMessage.includes("secure context"))) {
+    } else if (
+      errorName === "TypeError" &&
+      (errorMessage.includes("getUserMedia") ||
+        errorMessage.includes("secure context"))
+    ) {
       return "Microphone access requires HTTPS. Please access this site via HTTPS or use localhost.";
     } else {
       return `Failed to access microphone: ${errorMessage || errorName}`;
@@ -737,22 +1303,25 @@ const SpaceRoom = () => {
   // Check if getUserMedia is available and if we're in a secure context
   const checkMediaDevicesSupport = () => {
     // Check if we're in a secure context (HTTPS or localhost)
-    const isSecureContext = window.isSecureContext || 
-      window.location.protocol === 'https:' || 
-      window.location.hostname === 'localhost' || 
-      window.location.hostname === '127.0.0.1';
+    const isSecureContext =
+      window.isSecureContext ||
+      window.location.protocol === "https:" ||
+      window.location.hostname === "localhost" ||
+      window.location.hostname === "127.0.0.1";
 
     if (!isSecureContext) {
       return {
         supported: false,
-        message: "Microphone access requires HTTPS. Please access this site via HTTPS or use localhost. For network access, you need to set up SSL/TLS."
+        message:
+          "Microphone access requires HTTPS. Please access this site via HTTPS or use localhost. For network access, you need to set up SSL/TLS.",
       };
     }
 
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       return {
         supported: false,
-        message: "Your browser doesn't support microphone access. Please use a modern browser (Chrome, Firefox, Safari, Edge)."
+        message:
+          "Your browser doesn't support microphone access. Please use a modern browser (Chrome, Firefox, Safari, Edge).",
       };
     }
     return { supported: true };
@@ -851,7 +1420,10 @@ const SpaceRoom = () => {
       return;
     }
 
-    if (!mediaRecorderRef.current || mediaRecorderRef.current.state === "inactive") {
+    if (
+      !mediaRecorderRef.current ||
+      mediaRecorderRef.current.state === "inactive"
+    ) {
       return;
     }
 
@@ -874,7 +1446,7 @@ const SpaceRoom = () => {
       }
 
       setIsRecording(false);
-      
+
       // Store recordingId from stop response if available (in case it wasn't set before)
       if (data.recordingId) {
         setRecordingId(data.recordingId);
@@ -901,7 +1473,7 @@ const SpaceRoom = () => {
 
     // Use ref value first, fallback to state, then check if valid
     const currentRecordingId = recordingIdRef.current || recordingId;
-    
+
     if (!currentRecordingId) {
       console.error("No recording ID available for upload");
       toast.error("Recording ID not found. Cannot upload recording.");
@@ -1013,7 +1585,7 @@ const SpaceRoom = () => {
     }
   };
 
-  // Connect to all participants in the space
+  // Connect to all participants in the space (optimized for parallel connections)
   const connectToAllParticipants = async (spaceData) => {
     if (!spaceData || !socket) return;
 
@@ -1026,10 +1598,16 @@ const SpaceRoom = () => {
     });
 
     if (DEBUG) {
-      console.log(`[WebRTC] Connecting to ${allParticipants.length} participants`);
+      console.log(
+        `[WebRTC] Connecting to ${allParticipants.length} participants in parallel`
+      );
     }
 
-    // Notify others that we're ready
+    // Set connecting status immediately
+    setAudioStatus("connecting");
+    setConnectionProgress({ total: allParticipants.length, connected: 0 });
+
+    // Notify others that we're ready (all at once)
     allParticipants.forEach((participant) => {
       const participantId = participant._id || participant;
       socket.emit("space:webrtc:ready", {
@@ -1038,10 +1616,21 @@ const SpaceRoom = () => {
       });
     });
 
-    // Also set up connections (in case we're joining late)
-    for (const participant of allParticipants) {
+    // Set up ALL connections in parallel (not sequentially)
+    const connectionPromises = allParticipants.map((participant) => {
       const participantId = participant._id || participant;
-      await setupPeerConnection(participantId);
+      return setupPeerConnection(participantId).catch((error) => {
+        console.error(`[WebRTC] Failed to connect to ${participantId}:`, error);
+        // Don't throw - continue with other connections
+        return null;
+      });
+    });
+
+    // Wait for all connections to be initiated (not necessarily completed)
+    await Promise.allSettled(connectionPromises);
+
+    if (DEBUG) {
+      console.log(`[WebRTC] All connection attempts initiated`);
     }
   };
 
@@ -1052,9 +1641,11 @@ const SpaceRoom = () => {
         track.enabled = newMutedState;
       });
       setIsMuted(newMutedState);
-      
+
       if (DEBUG) {
-        console.log(`[WebRTC] Audio track ${newMutedState ? "muted" : "unmuted"}`);
+        console.log(
+          `[WebRTC] Audio track ${newMutedState ? "muted" : "unmuted"}`
+        );
       }
     }
   };
@@ -1064,25 +1655,62 @@ const SpaceRoom = () => {
     try {
       // Try to play all audio elements
       let played = false;
-      audioElementsRef.current.forEach((audioEl) => {
+      const playPromises = [];
+
+      audioElementsRef.current.forEach((audioEl, userId) => {
         if (audioEl.srcObject) {
+          // Ensure audio is not muted and volume is set
+          audioEl.muted = false;
+          audioEl.volume = 1.0;
+
+          // Enable all tracks in the stream
+          if (audioEl.srcObject && audioEl.srcObject.getAudioTracks) {
+            audioEl.srcObject.getAudioTracks().forEach((track) => {
+              if (!track.enabled) {
+                track.enabled = true;
+                if (DEBUG)
+                  console.log(`[WebRTC] Enabled track for user ${userId}`);
+              }
+            });
+          }
+
           const playPromise = audioEl.play();
           if (playPromise !== undefined) {
-            playPromise
-              .then(() => {
-                played = true;
-                setAudioEnabled(true);
-                setAudioStatus("connected");
-              })
-              .catch((error) => {
-                console.error("[WebRTC] Error playing audio:", error);
-              });
+            playPromises.push(
+              playPromise
+                .then(() => {
+                  if (DEBUG)
+                    console.log(`[WebRTC] Audio playing for user ${userId}`);
+                  played = true;
+                  setAudioEnabled(true);
+                  setAudioStatus("connected");
+                })
+                .catch((error) => {
+                  console.error(
+                    `[WebRTC] Error playing audio for ${userId}:`,
+                    error
+                  );
+                  console.error(`[WebRTC] Audio element state:`, {
+                    muted: audioEl.muted,
+                    volume: audioEl.volume,
+                    paused: audioEl.paused,
+                    readyState: audioEl.readyState,
+                    srcObject: !!audioEl.srcObject,
+                  });
+                })
+            );
           }
         }
       });
 
+      await Promise.allSettled(playPromises);
+
       if (played) {
         toast.success("Audio enabled");
+      } else {
+        toast.error(
+          "Failed to enable audio. Please check your browser settings."
+        );
       }
     } catch (error) {
       console.error("[WebRTC] Error enabling audio:", error);
@@ -1107,11 +1735,11 @@ const SpaceRoom = () => {
 
       setIsSpeaker(true);
       setSpace(data);
-      
+
       // Get user media and initialize WebRTC
       await initializeSpeakerAudio();
       await connectToAllParticipants(data);
-      
+
       toast.success("Joined as speaker");
     } catch (error) {
       console.error("Error joining as speaker:", error);
@@ -1136,7 +1764,7 @@ const SpaceRoom = () => {
 
       setIsSpeaker(false);
       setSpace(data);
-      
+
       // Stop local audio and switch to listener mode
       if (localStream) {
         localStream.getTracks().forEach((track) => track.stop());
@@ -1146,14 +1774,14 @@ const SpaceRoom = () => {
         localAudioTrackRef.current.stop();
         localAudioTrackRef.current = null;
       }
-      
+
       // Close existing connections and reconnect as listener
       peerConnectionsRef.current.forEach((pc, userId) => {
         closePeerConnection(userId);
       });
-      
+
       await connectToAllParticipants(data);
-      
+
       toast.success("Joined as listener");
     } catch (error) {
       console.error("Error joining as listener:", error);
@@ -1209,9 +1837,7 @@ const SpaceRoom = () => {
             name={space.hostId?.name}
           />
           <Flex flexDirection="column">
-            <Text fontWeight="bold">
-              {space.title || "Untitled Space"}
-            </Text>
+            <Text fontWeight="bold">{space.title || "Untitled Space"}</Text>
             <Text fontSize="sm" color="gray.500">
               Hosted by {space.hostId?.username}
             </Text>
@@ -1272,7 +1898,13 @@ const SpaceRoom = () => {
 
       {/* Recording Indicator (visible to all) */}
       {isRecording && (
-        <Box p={3} bg="red.50" borderRadius="md" borderWidth="1px" borderColor="red.200">
+        <Box
+          p={3}
+          bg="red.50"
+          borderRadius="md"
+          borderWidth="1px"
+          borderColor="red.200"
+        >
           <Text fontSize="sm" color="red.700">
             🔴 Recording in progress...
           </Text>
@@ -1333,9 +1965,20 @@ const SpaceRoom = () => {
             Audio Status
           </Text>
           {audioStatus === "connecting" && (
-            <Flex alignItems="center" gap={2}>
-              <Spinner size="sm" />
-              <Text fontSize="sm">Connecting audio...</Text>
+            <Flex flexDirection="column" gap={2}>
+              <Flex alignItems="center" gap={2}>
+                <Spinner size="sm" />
+                <Text fontSize="sm">Connecting audio...</Text>
+              </Flex>
+              {connectionProgress.total > 0 && (
+                <Text fontSize="xs" color="gray.500">
+                  {connectionProgress.connected} of {connectionProgress.total}{" "}
+                  connections established
+                </Text>
+              )}
+              <Text fontSize="xs" color="gray.500">
+                This usually takes 2-5 seconds
+              </Text>
             </Flex>
           )}
           {audioStatus === "autoplay-blocked" && !audioEnabled && (
@@ -1349,9 +1992,27 @@ const SpaceRoom = () => {
             </Flex>
           )}
           {audioStatus === "connected" && (
-            <Text fontSize="sm" color="green.500">
-              ✓ Audio connected
-            </Text>
+            <Flex flexDirection="column" gap={2}>
+              <Text fontSize="sm" color="green.500">
+                ✓ Audio connected
+              </Text>
+              {remoteStreams.length > 0 && (
+                <Text fontSize="xs" color="gray.500">
+                  Listening to {remoteStreams.length} speaker
+                  {remoteStreams.length !== 1 ? "s" : ""}
+                </Text>
+              )}
+            </Flex>
+          )}
+          {audioStatus === "idle" && remoteStreams.length === 0 && (
+            <Flex flexDirection="column" gap={2}>
+              <Text fontSize="sm" color="orange.500">
+                Waiting for speakers...
+              </Text>
+              <Text fontSize="xs" color="gray.500">
+                No active audio streams yet
+              </Text>
+            </Flex>
           )}
           {connectionQuality === "poor" && (
             <Text fontSize="sm" color="red.500">
@@ -1398,4 +2059,3 @@ const SpaceRoom = () => {
 };
 
 export default SpaceRoom;
-

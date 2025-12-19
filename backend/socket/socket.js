@@ -13,13 +13,22 @@ const server = http.createServer(app);
 const allowedOrigins = [
   "http://localhost:3000",
   "http://localhost:3005",
-  "http://192.168.43.223:3005/",
-  "http://172.20.208.1:3005/",
   "http://localhost:5173", // Vite default port
   "https://connecthub-oddy.onrender.com",
   "https://connecthub-15.onrender.com",
   process.env.FRONTEND_URL,
+  process.env.RENDER_EXTERNAL_URL, // Render provides this automatically
 ].filter(Boolean); // Remove undefined values
+
+// Helper function to check if origin is a Render URL
+function isRenderOrigin(origin) {
+  if (!origin) return false;
+  // Match Render URLs: *.onrender.com (with or without trailing slash, with or without port/path)
+  const normalized = origin.replace(/\/$/, "").toLowerCase();
+  // Match: https://anything.onrender.com (with optional port, path, etc.)
+  const renderPattern = /^https?:\/\/[\w-]+\.onrender\.com/;
+  return renderPattern.test(normalized);
+}
 
 const io = new Server(server, {
   cors: {
@@ -37,11 +46,27 @@ const io = new Server(server, {
         }
       }
 
-      // Check against allowed origins
-      if (allowedOrigins.indexOf(origin) !== -1) {
+      // Always allow Render URLs (both development and production)
+      if (isRenderOrigin(origin)) {
+        return callback(null, true);
+      }
+
+      // Check against allowed origins (exact match, no trailing slash)
+      const normalizedOrigin = origin.replace(/\/$/, "").toLowerCase();
+      const normalizedAllowed = allowedOrigins.map((o) =>
+        o.replace(/\/$/, "").toLowerCase()
+      );
+
+      if (normalizedAllowed.indexOf(normalizedOrigin) !== -1) {
         callback(null, true);
       } else {
-        console.warn(`CORS blocked origin: ${origin}`);
+        // In production on Render, be more permissive - allow if it looks like a valid URL
+        if (process.env.NODE_ENV === "production" && process.env.RENDER) {
+          if (origin.startsWith("https://")) {
+            return callback(null, true);
+          }
+        }
+        console.warn(`[Socket.IO] CORS blocked origin: ${origin}`);
         callback(new Error("Not allowed by CORS"));
       }
     },
@@ -58,6 +83,7 @@ export const getRecipiantSocketId = (recipientId) => {
 };
 
 const userSocketMap = {}; //userId :socketId
+const spaceParticipantsCache = new Map(); // spaceId -> Set of participant userIds (cached for fast lookup)
 
 io.on("connection", (socket) => {
   const userId = socket?.handshake.query.userId;
@@ -117,12 +143,21 @@ io.on("connection", (socket) => {
         return;
       }
 
-      const isParticipant = conversation.participants.some(
-        (p) => p.toString() === userId.toString()
-      );
-      if (!isParticipant) {
+      // Check membership based on conversation type
+      let isAuthorized = false;
+      if (conversation.type === "group") {
+        isAuthorized = conversation.members.some(
+          (m) => m.userId.toString() === userId.toString()
+        );
+      } else {
+        isAuthorized = conversation.participants.some(
+          (p) => p.toString() === userId.toString()
+        );
+      }
+
+      if (!isAuthorized) {
         console.warn(
-          `⚠️ User ${userId} is not a participant in chat ${chatId}`
+          `⚠️ User ${userId} is not authorized to join chat ${chatId}`
         );
         return;
       }
@@ -163,10 +198,18 @@ io.on("connection", (socket) => {
       const conversation = await Conversation.findById(chatId);
       if (!conversation) return;
 
-      const isParticipant = conversation.participants.some(
-        (p) => p.toString() === userId.toString()
-      );
-      if (!isParticipant) return;
+      // Check membership based on conversation type
+      let isAuthorized = false;
+      if (conversation.type === "group") {
+        isAuthorized = conversation.members.some(
+          (m) => m.userId.toString() === userId.toString()
+        );
+      } else {
+        isAuthorized = conversation.participants.some(
+          (p) => p.toString() === userId.toString()
+        );
+      }
+      if (!isAuthorized) return;
 
       // Update typing state
       if (!typingState.has(chatId)) {
@@ -196,10 +239,18 @@ io.on("connection", (socket) => {
       const conversation = await Conversation.findById(chatId);
       if (!conversation) return;
 
-      const isParticipant = conversation.participants.some(
-        (p) => p.toString() === userId.toString()
-      );
-      if (!isParticipant) return;
+      // Check membership based on conversation type
+      let isAuthorized = false;
+      if (conversation.type === "group") {
+        isAuthorized = conversation.members.some(
+          (m) => m.userId.toString() === userId.toString()
+        );
+      } else {
+        isAuthorized = conversation.participants.some(
+          (p) => p.toString() === userId.toString()
+        );
+      }
+      if (!isAuthorized) return;
 
       // Clear typing state
       if (typingState.has(chatId)) {
@@ -382,14 +433,32 @@ io.on("connection", (socket) => {
   });
 
   // Join space room for real-time updates
-  socket.on("space:join", ({ spaceId }) => {
+  socket.on("space:join", async ({ spaceId }) => {
     socket.join(`space:${spaceId}`);
     console.log(`User ${userId} joined space ${spaceId}`);
+
+    // Cache space participants to avoid database lookups for ICE candidates
+    try {
+      const space = await Space.findById(spaceId);
+      if (space) {
+        const participants = new Set();
+        participants.add(space.hostId.toString());
+        space.speakers.forEach((s) => participants.add(s.toString()));
+        space.listeners.forEach((l) => participants.add(l.toString()));
+        spaceParticipantsCache.set(spaceId.toString(), participants);
+        console.log(
+          `✅ Cached ${participants.size} participants for space ${spaceId}`
+        );
+      }
+    } catch (error) {
+      console.error("Error caching space participants:", error);
+    }
   });
 
   socket.on("space:leave", ({ spaceId }) => {
     socket.leave(`space:${spaceId}`);
     console.log(`User ${userId} left space ${spaceId}`);
+    // Note: We keep the cache even after leaving, in case user rejoins
   });
 
   // ========== WebRTC Signaling for Audio Spaces ==========
@@ -402,19 +471,39 @@ io.on("connection", (socket) => {
         return;
       }
 
-      // Verify sender is participant in space
+      // Verify sender is participant in space (use cache if available, fallback to DB)
       try {
-        const Space = (await import("../Models/spaceModel.js")).default;
-        const space = await Space.findById(spaceId);
-        if (!space) {
-          console.error(`Space ${spaceId} not found`);
-          return;
-        }
+        // Try cache first for faster validation
+        const cachedParticipants = spaceParticipantsCache.get(
+          spaceId.toString()
+        );
+        let isParticipant = false;
 
-        const isParticipant =
-          space.hostId.toString() === userId.toString() ||
-          space.speakers.some((s) => s.toString() === userId.toString()) ||
-          space.listeners.some((l) => l.toString() === userId.toString());
+        if (cachedParticipants) {
+          isParticipant = cachedParticipants.has(userId.toString());
+        } else {
+          // Cache miss - do database lookup and cache result
+          const Space = (await import("../Models/spaceModel.js")).default;
+          const space = await Space.findById(spaceId);
+          if (!space) {
+            console.error(`Space ${spaceId} not found`);
+            return;
+          }
+
+          isParticipant =
+            space.hostId.toString() === userId.toString() ||
+            space.speakers.some((s) => s.toString() === userId.toString()) ||
+            space.listeners.some((l) => l.toString() === userId.toString());
+
+          // Cache the result for future use
+          if (space) {
+            const participants = new Set();
+            participants.add(space.hostId.toString());
+            space.speakers.forEach((s) => participants.add(s.toString()));
+            space.listeners.forEach((l) => participants.add(l.toString()));
+            spaceParticipantsCache.set(spaceId.toString(), participants);
+          }
+        }
 
         if (!isParticipant) {
           console.error(
@@ -453,17 +542,37 @@ io.on("connection", (socket) => {
       }
 
       try {
-        const Space = (await import("../Models/spaceModel.js")).default;
-        const space = await Space.findById(spaceId);
-        if (!space) {
-          console.error(`Space ${spaceId} not found`);
-          return;
-        }
+        // Try cache first for faster validation
+        const cachedParticipants = spaceParticipantsCache.get(
+          spaceId.toString()
+        );
+        let isParticipant = false;
 
-        const isParticipant =
-          space.hostId.toString() === userId.toString() ||
-          space.speakers.some((s) => s.toString() === userId.toString()) ||
-          space.listeners.some((l) => l.toString() === userId.toString());
+        if (cachedParticipants) {
+          isParticipant = cachedParticipants.has(userId.toString());
+        } else {
+          // Cache miss - do database lookup and cache result
+          const Space = (await import("../Models/spaceModel.js")).default;
+          const space = await Space.findById(spaceId);
+          if (!space) {
+            console.error(`Space ${spaceId} not found`);
+            return;
+          }
+
+          isParticipant =
+            space.hostId.toString() === userId.toString() ||
+            space.speakers.some((s) => s.toString() === userId.toString()) ||
+            space.listeners.some((l) => l.toString() === userId.toString());
+
+          // Cache the result for future use
+          if (space) {
+            const participants = new Set();
+            participants.add(space.hostId.toString());
+            space.speakers.forEach((s) => participants.add(s.toString()));
+            space.listeners.forEach((l) => participants.add(l.toString()));
+            spaceParticipantsCache.set(spaceId.toString(), participants);
+          }
+        }
 
         if (!isParticipant) {
           console.error(
@@ -492,32 +601,38 @@ io.on("connection", (socket) => {
     }
   );
 
-  // WebRTC ICE candidate
+  // WebRTC ICE candidate (optimized - uses cache instead of database lookup)
   socket.on(
     "space:webrtc:ice",
-    async ({ spaceId, targetUserId, candidate, fromUserId }) => {
+    ({ spaceId, targetUserId, candidate, fromUserId }) => {
       if (!userId || !spaceId || !targetUserId || !candidate) {
         console.error("Invalid WebRTC ICE parameters");
         return;
       }
 
       try {
-        const Space = (await import("../Models/spaceModel.js")).default;
-        const space = await Space.findById(spaceId);
-        if (!space) {
-          return;
+        // Use cached participants instead of database lookup (ICE candidates are sent very frequently)
+        const cachedParticipants = spaceParticipantsCache.get(
+          spaceId.toString()
+        );
+
+        if (!cachedParticipants) {
+          // Cache miss - skip validation for ICE (less critical, just relay it)
+          // This prevents database timeout issues
+          console.warn(
+            `⚠️ Space ${spaceId} not in cache, relaying ICE candidate anyway`
+          );
+        } else {
+          // Check if user is participant (from cache)
+          if (!cachedParticipants.has(userId.toString())) {
+            console.warn(
+              `⚠️ User ${userId} not in cached participants for space ${spaceId}`
+            );
+            return;
+          }
         }
 
-        const isParticipant =
-          space.hostId.toString() === userId.toString() ||
-          space.speakers.some((s) => s.toString() === userId.toString()) ||
-          space.listeners.some((l) => l.toString() === userId.toString());
-
-        if (!isParticipant) {
-          return;
-        }
-
-        // Relay ICE candidate to target user
+        // Relay ICE candidate to target user (no database lookup needed)
         const targetSocketId = userSocketMap[targetUserId];
         if (targetSocketId) {
           io.to(targetSocketId).emit("space:webrtc:ice", {
@@ -525,6 +640,8 @@ io.on("connection", (socket) => {
             fromUserId: userId,
             candidate,
           });
+        } else {
+          // Target not connected - silently ignore (common during connection setup)
         }
       } catch (error) {
         console.error("Error in space:webrtc:ice:", error);
@@ -541,14 +658,34 @@ io.on("connection", (socket) => {
       }
 
       try {
-        const Space = (await import("../Models/spaceModel.js")).default;
-        const space = await Space.findById(spaceId);
-        if (!space) return;
+        // Try cache first for faster validation
+        const cachedParticipants = spaceParticipantsCache.get(
+          spaceId.toString()
+        );
+        let isParticipant = false;
 
-        const isParticipant =
-          space.hostId.toString() === userId.toString() ||
-          space.speakers.some((s) => s.toString() === userId.toString()) ||
-          space.listeners.some((l) => l.toString() === userId.toString());
+        if (cachedParticipants) {
+          isParticipant = cachedParticipants.has(userId.toString());
+        } else {
+          // Cache miss - do database lookup and cache result
+          const Space = (await import("../Models/spaceModel.js")).default;
+          const space = await Space.findById(spaceId);
+          if (!space) return;
+
+          isParticipant =
+            space.hostId.toString() === userId.toString() ||
+            space.speakers.some((s) => s.toString() === userId.toString()) ||
+            space.listeners.some((l) => l.toString() === userId.toString());
+
+          // Cache the result for future use
+          if (space) {
+            const participants = new Set();
+            participants.add(space.hostId.toString());
+            space.speakers.forEach((s) => participants.add(s.toString()));
+            space.listeners.forEach((l) => participants.add(l.toString()));
+            spaceParticipantsCache.set(spaceId.toString(), participants);
+          }
+        }
 
         if (!isParticipant) return;
 
