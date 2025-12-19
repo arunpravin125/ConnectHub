@@ -24,7 +24,7 @@ export const SocketContextProvider = ({ children }) => {
       return "http://localhost:4900";
     }
     // In production, use the production URL
-    return "https://threads-app-5.onrender.com";
+    return "https://connecthub-oddy.onrender.com";
   };
 
   useEffect(() => {

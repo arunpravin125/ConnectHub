@@ -29,7 +29,7 @@ const allowedOrigins = [
   "http://localhost:3000",
   "http://localhost:3005",
   "http://localhost:5173", // Vite default port
-  "https://threads-app-5.onrender.com",
+  "https://connecthub-oddy.onrender.com",
   process.env.FRONTEND_URL,
 ].filter(Boolean);
 
