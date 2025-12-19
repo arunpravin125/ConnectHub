@@ -18,6 +18,39 @@ const messageSchema = new mongoose.Schema({
     img:{
         type:String,
         default:""
+    },
+    video:{
+        type:String,
+        default:""
+    },
+    fileUrl:{
+        type:String,
+        default:""
+    },
+    fileName:{
+        type:String,
+        default:""
+    },
+    fileType:{
+        type:String,
+        default:"" // pdf, doc, docx, etc.
+    },
+    audio:{
+        type:String,
+        default:"" // audio file URL
+    },
+    // WhatsApp-style delete fields
+    deletedForUsers: [{
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User"
+    }],
+    deletedForAll: {
+        type: Boolean,
+        default: false
+    },
+    deletedForAllAt: {
+        type: Date,
+        default: null
     }
 },{timestamps:true})
 

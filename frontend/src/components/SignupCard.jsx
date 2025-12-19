@@ -72,19 +72,27 @@ export default function SignupCard() {
       minH={'100vh'}
       align={'center'}
       justify={'center'}
+      px={{ base: 4, md: 6 }}
      >
-      <Stack spacing={8} mx={'auto'} maxW={'lg'} py={12} px={6}>
+      <Stack spacing={6} mx={'auto'} maxW={'lg'} py={12} px={6} w="full">
         <Stack align={'center'}>
-          <Heading fontSize={'4xl'} textAlign={'center'}>
-            Sign up
+          <Heading fontSize={{ base: "3xl", md: "4xl" }} textAlign={'center'}>
+            Create your account
           </Heading>
+          <Text fontSize="sm" color={useColorModeValue("ink.600", "whiteAlpha.700")}>
+            Join the community and share what matters.
+          </Text>
          
         </Stack>
         <Box
-          rounded={'lg'}
-          bg={useColorModeValue('white', 'gray.dark')}
-          boxShadow={'lg'}
-          p={8}>
+          rounded={'2xl'}
+          bg={useColorModeValue('whiteAlpha.900', 'blackAlpha.400')}
+          border="1px solid"
+          borderColor={useColorModeValue("sand.200", "ink.700")}
+          boxShadow={'0 24px 48px -36px rgba(0, 0, 0, 0.5)'}
+          p={{ base: 6, md: 8 }}
+          backdropFilter="blur(10px)"
+        >
           <Stack spacing={4}>
             <HStack>
               <Box>
@@ -125,17 +133,18 @@ export default function SignupCard() {
                 isLoading={loading}
                 disabled={loading}
                 size="lg"
-                bg={useColorModeValue("gray.600","gray.700")}
-                color={'white'}
+                colorScheme="brand"
                 _hover={{
-                  bg: 'gray.700',
-                }}>
+                  transform: "translateY(-1px)",
+                }}
+                transition="all 180ms ease"
+              >
                 Sign up
               </Button>
             </Stack>
             <Stack pt={6}>
               <Text align={'center'} onClick={()=>setAuthScreen("login")} >
-                Already a user? <Link color={'blue.400'}>Login</Link>
+                Already a user? <Link color={'brand.500'}>Login</Link>
               </Text>
             </Stack>
           </Stack>

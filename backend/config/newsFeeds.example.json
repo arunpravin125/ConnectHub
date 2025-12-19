@@ -1,0 +1,22 @@
+[
+  {
+    "feedUrl": "https://feeds.bbci.co.uk/news/rss.xml",
+    "sourceName": "BBC News"
+  },
+  {
+    "feedUrl": "https://rss.cnn.com/rss/edition.rss",
+    "sourceName": "CNN"
+  },
+  {
+    "feedUrl": "https://feeds.reuters.com/reuters/topNews",
+    "sourceName": "Reuters"
+  },
+  {
+    "feedUrl": "https://www.theguardian.com/world/rss",
+    "sourceName": "The Guardian"
+  },
+  {
+    "feedUrl": "https://feeds.npr.org/1001/rss.xml",
+    "sourceName": "NPR"
+  }
+]

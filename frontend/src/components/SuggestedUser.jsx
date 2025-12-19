@@ -1,4 +1,4 @@
-import { Avatar, Box, Button, Flex, Text } from '@chakra-ui/react'
+import { Avatar, Box, Button, Flex, Text, useColorModeValue } from '@chakra-ui/react'
 import React from 'react'
 import { Link } from 'react-router-dom'
 import usehandlefollowUnfollow from '../hooks/usehandlefollowUnfollow'
@@ -6,27 +6,26 @@ import usehandlefollowUnfollow from '../hooks/usehandlefollowUnfollow'
 const SuggestedUser = ({user}) => {
    const {handleFollowAndUnfollow,updating,following}=usehandlefollowUnfollow(user)
   return (
-    <Flex gap={2} justifyContent={"space-between"} alignItems={"center"}>
-    <Flex gap={2} as={Link} to={`${user.username}`}>
-        <Avatar src={user.profilePic} />
+    <Flex gap={3} justifyContent={"space-between"} alignItems={"center"}>
+    <Flex gap={3} as={Link} to={`${user.username}`} alignItems="center">
+        <Avatar src={user.profilePic} size="sm" />
         <Box>
             <Text fontSize={"sm"} fontWeight={"bold"}>
             {user.name}
             </Text>
-            <Text color={"gray.light"} fontSize={"sm"}>
+            <Text color={useColorModeValue("ink.500", "whiteAlpha.600")} fontSize={"xs"}>
               {user.username}
             </Text>
         </Box>
     </Flex>
     <Button
         size={"sm"}
-        color={following ? "black" : "white"}
-        bg={following ? "white" : "blue.400"}
+        variant={following ? "outline" : "solid"}
+        colorScheme={following ? "gray" : "brand"}
         onClick={handleFollowAndUnfollow}
         isLoading={updating}
         _hover={{
-            color: following ? "black" : "white",
-            opacity: ".8",
+            opacity: ".9",
         }}
     >
         {following ? "Unfollow" : "Follow"}

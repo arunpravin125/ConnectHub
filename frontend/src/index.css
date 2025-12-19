@@ -1,6 +1,36 @@
+@import url("https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap");
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+:root {
+  --app-surface: #ffffff;
+  --app-surface-elevated: #faf7f2;
+  --app-border: #e7ded0;
+  --app-accent: #ff6b35;
+  --app-accent-2: #14b8a6;
+  --app-text: #11141a;
+}
+
+.chakra-ui-dark,
+.chakra-ui-dark body {
+  --app-surface: #1c2028;
+  --app-surface-elevated: #2a2f38;
+  --app-border: #434956;
+  --app-accent: #ff8a4b;
+  --app-accent-2: #22c1b5;
+  --app-text: #f7f7f8;
+}
+
+.app-shell {
+  animation: page-fade 480ms ease-out both;
+}
+
+.post-card {
+  animation: rise-in 520ms ease-out both;
+  display: block;
+}
 
 .icon-container{
   border-radius:50%;
@@ -11,22 +41,43 @@
 }
 
 .icon-container:hover{
-  background-color: #1e1e1e;
+  background-color: rgba(0, 0, 0, 0.08);
 }
 
+.chakra-ui-dark .icon-container:hover,
+.chakra-ui-dark body .icon-container:hover {
+  background-color: rgba(255, 255, 255, 0.08);
+}
+
+@keyframes page-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
 
 ::-webkit-scrollbar{
   width:7px;
 }
 
 ::-webkit-scrollbar-track{
-  background-color: #1e1e1e;
+  background-color: rgba(0, 0, 0, 0.08);
 }
 
 ::-webkit-scrollbar-thumb{
-  background-color: #888;
-}
-
-::-webkit-scrollbar-thumb{
-  background-color: #555;
+  background-color: rgba(0, 0, 0, 0.35);
+  border-radius: 999px;
 }

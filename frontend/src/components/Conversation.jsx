@@ -27,11 +27,10 @@ const Conversation = ({ conversation,isOnline }) => {
     <Flex
       gap={4}
       alignItems={"center"}
-      p={"1"}
+      p={2}
       _hover={{
         cursor: "pointer",
-        bg: useColorModeValue("gray.600", "gray.dark"),
-        color: "white",
+        bg: useColorModeValue("sand.100", "ink.700"),
       }}
       onClick={() =>
         setSelectedConversation({
@@ -42,8 +41,8 @@ const Conversation = ({ conversation,isOnline }) => {
           mock:conversation.mock
         })
       }
-      bg={selectedConversation?._id == conversation?._id ? useColorModeValue("gray.600",'gray.dark'):""}
-      borderRadius={"md"}
+      bg={selectedConversation?._id == conversation?._id ? useColorModeValue("sand.200", "ink.700") : "transparent"}
+      borderRadius="lg"
     >
       <WrapItem>
         <Avatar
@@ -58,11 +57,11 @@ const Conversation = ({ conversation,isOnline }) => {
         </Avatar>
       </WrapItem>
       <Stack direction={"column"} fontSize={"sm"}>
-        <Text fontWeight={"700"} display={"flex"} alignItems={"center"}>
+        <Box fontWeight={"700"} display={"flex"} alignItems={"center"}>
           {user.username}
           <Image src="/verified.png" w={4} h={4} ml={1} />
-        </Text>
-        <Text fontSize={"xs"} display={"flex"} alignItems={"center"} gap={1}>
+        </Box>
+        <Box fontSize={"xs"} display={"flex"} alignItems={"center"} gap={1}>
           {currentUser._id == lastMessage.sender ? (
             
               <Box color={lastMessage.seen?"blue.400":""} >
@@ -76,7 +75,7 @@ const Conversation = ({ conversation,isOnline }) => {
           {lastMessage.text.length > 18
             ? lastMessage.text.substring(0, 18) + "..."
             : lastMessage.text || <BsFillImageFill size={16} />}
-        </Text>
+        </Box>
       </Stack>
     </Flex>
   );

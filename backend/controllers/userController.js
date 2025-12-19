@@ -112,25 +112,24 @@ export const followUnFollowUser = async (req, res) => {
     if (isFollowing) {
       // unfollow user
       // modify current user following, modigfy followers of userToModiify
-      await User.updateOne({_id:id},{$pull:{followers:req.user._id}})
-      await User.updateOne({_id:req.user._id},{$pull:{following:id}})
+      await User.updateOne({ _id: id }, { $pull: { followers: req.user._id } });
+      await User.updateOne({ _id: req.user._id }, { $pull: { following: id } });
       // await User.findByIdAndUpdate(req.user._id, { $pull: { following: id } });
-       // login user ku pooie following array la {id=>already following Id} remove pandrom aprm {update vera pannanum follow pannuna gla } pooi remove pannanum follwers array la eruthu
+      // login user ku pooie following array la {id=>already following Id} remove pandrom aprm {update vera pannanum follow pannuna gla } pooi remove pannanum follwers array la eruthu
       // await User.findByIdAndUpdate(id, { $pull: { followers: req.user._id } });
-      
+
       res.status(200).json({ message: "User unfollowed successfully" });
     } else {
-      await User.updateOne({_id:id},{$push:{followers:req.user._id}})
-      await User.updateOne({_id:req.user._id},{$push:{following:id}})
+      await User.updateOne({ _id: id }, { $push: { followers: req.user._id } });
+      await User.updateOne({ _id: req.user._id }, { $push: { following: id } });
       //follow user
       // await User.findByIdAndUpdate(req.user._id, { $push: { following: id } });
       // await User.findByIdAndUpdate(id, { $push: { followers: req.user._id } });
       const notification = new Notification({
-        type:"follow",
-        from:currentUser._id,
-        to:userToModify._id
-
-    })
+        type: "follow",
+        from: currentUser._id,
+        to: userToModify._id,
+      });
       res.status(200).json({ message: "User followed successfully" });
     }
   } catch (error) {
@@ -201,29 +200,106 @@ export const updateUser = async (req, res) => {
 
 export const getUserProfile = async (req, res) => {
   const { query } = req.params;
-  // we will fectch profile either user name or id
+  // we will fetch profile either user name or id
 
   // query is either username or userId
   try {
+    // Validate query parameter
+    if (!query || query.trim() === "") {
+      return res.status(400).json({ error: "User ID or username is required" });
+    }
+
+    // Check MongoDB connection state
+    if (mongoose.connection.readyState !== 1) {
+      console.error(
+        "MongoDB connection not ready. State:",
+        mongoose.connection.readyState
+      );
+      return res.status(503).json({
+        error: "Database connection unavailable. Please try again.",
+      });
+    }
+
     let user;
+
+    // Check if query is a valid MongoDB ObjectId
     if (mongoose.Types.ObjectId.isValid(query)) {
-      user = await User.findById(query)
-        .select("-password")
-        .select("-updatedAt");
+      try {
+        user = await User.findById(query)
+          .select("-password -updatedAt")
+          .lean()
+          .maxTimeMS(5000); // 5 second timeout
+      } catch (dbError) {
+        console.error("Database error in getUserProfile (by ID):", dbError);
+        // Check if it's a connection error
+        if (
+          dbError.name === "MongoNetworkError" ||
+          dbError.name === "MongoServerSelectionError" ||
+          dbError.message.includes("ECONNRESET") ||
+          dbError.message.includes("connection")
+        ) {
+          return res.status(503).json({
+            error: "Database connection error. Please try again.",
+          });
+        }
+        throw dbError;
+      }
     } else {
-      user = await User.findOne({ username: query })
-        .select("-password")
-        .select("-updatedAt");
+      // Query by username
+      try {
+        user = await User.findOne({ username: query.trim() })
+          .select("-password -updatedAt")
+          .lean()
+          .maxTimeMS(5000); // 5 second timeout
+      } catch (dbError) {
+        console.error(
+          "Database error in getUserProfile (by username):",
+          dbError
+        );
+        // Check if it's a connection error
+        if (
+          dbError.name === "MongoNetworkError" ||
+          dbError.name === "MongoServerSelectionError" ||
+          dbError.message.includes("ECONNRESET") ||
+          dbError.message.includes("connection")
+        ) {
+          return res.status(503).json({
+            error: "Database connection error. Please try again.",
+          });
+        }
+        throw dbError;
+      }
     }
 
     if (!user) {
-      return res.status(400).json({ error: "User not found" });
+      return res.status(404).json({ error: "User not found" });
     }
 
     res.status(200).json(user);
   } catch (error) {
-    console.log("error in getUserProfile:", error.message);
-    res.status(500).json({ error: error.message });
+    console.error("Error in getUserProfile:", error);
+    console.error("Error name:", error.name);
+    console.error("Error message:", error.message);
+
+    // Handle specific error types
+    if (
+      error.name === "MongoNetworkError" ||
+      error.name === "MongoServerSelectionError" ||
+      error.message.includes("ECONNRESET") ||
+      error.message.includes("connection")
+    ) {
+      return res.status(503).json({
+        error: "Database connection error. Please try again later.",
+      });
+    }
+
+    if (error.name === "CastError") {
+      return res.status(400).json({ error: "Invalid user ID format" });
+    }
+
+    res.status(500).json({
+      error: error.message || "Internal server error",
+    });
   }
 };
 
@@ -235,25 +311,75 @@ export const getSuggestedUsers = async (req, res) => {
 
     const usersFollowedByYou = await User.findById(userId).select("following");
 
+    if (!usersFollowedByYou) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
     const users = await User.aggregate([
       {
         $match: {
-          _id: { $ne: userId },
+          _id: { $ne: new mongoose.Types.ObjectId(userId) },
         },
       },
       {
         $sample: { size: 10 },
       },
     ]);
+    
+    // Convert following array to string array for comparison
+    const followingIds = usersFollowedByYou.following.map((id) => id.toString());
+    
     const filteredUsers = users.filter(
-      (user) => !usersFollowedByYou.following.includes(user._id)
+      (user) => !followingIds.includes(user._id.toString())
     );
     const suggestedUser = filteredUsers.slice(0, 4);
-    suggestedUser.forEach((user) => (user.password = null));
+    suggestedUser.forEach((user) => {
+      user.password = null;
+      // Convert _id to string for JSON serialization
+      user._id = user._id.toString();
+    });
     res.status(200).json(suggestedUser);
   } catch (error) {
     console.log("error in suggestedUser", error.message);
     res.status(500).json({ error: error.message });
+  }
+};
+
+export const searchUsers = async (req, res) => {
+  try {
+    const { query } = req.query;
+    const userId = req.user?._id;
+
+    if (!query || query.trim() === "") {
+      return res.status(400).json({ error: "Search query is required" });
+    }
+
+    const searchQuery = query.trim();
+
+    // Build search filter
+    const searchFilter = {
+      $or: [
+        { username: { $regex: searchQuery, $options: "i" } },
+        { name: { $regex: searchQuery, $options: "i" } },
+      ],
+    };
+
+    // Exclude current user if authenticated
+    if (userId) {
+      searchFilter._id = { $ne: userId };
+    }
+
+    // Search users by username or name (case-insensitive, partial match)
+    const users = await User.find(searchFilter)
+      .select("-password -updatedAt")
+      .limit(10) // Limit to 10 suggestions
+      .lean()
+      .maxTimeMS(5000);
+
+    res.status(200).json(users);
+  } catch (error) {
+    console.error("Error in searchUsers:", error);
+    res.status(500).json({ error: error.message || "Internal server error" });
   }
 };
 

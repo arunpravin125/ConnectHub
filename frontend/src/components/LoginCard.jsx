@@ -66,29 +66,34 @@ export default function LoginCard() {
 
   return (
     <Flex
-    
       minH={'100vh'}
       align={'center'}
       justify={'center'}
+      px={{ base: 4, md: 6 }}
      >
-      <Stack spacing={8} mx={'auto'} maxW={'lg'} py={12} px={6}>
+      <Stack spacing={6} mx={'auto'} maxW={'lg'} py={12} px={6} w="full">
         <Stack align={'center'}>
-          <Heading fontSize={'4xl'} textAlign={'center'}>
-           Login
+          <Heading fontSize={{ base: "3xl", md: "4xl" }} textAlign={'center'}>
+            Welcome back
           </Heading>
+          <Text fontSize="sm" color={useColorModeValue("ink.600", "whiteAlpha.700")}>
+            Sign in to keep the conversation moving.
+          </Text>
          
         </Stack>
         <Box 
-          rounded={'lg'}
-          bg={useColorModeValue('white', 'gray.dark')}
-          boxShadow={'lg'}
+          rounded={'2xl'}
+          bg={useColorModeValue('whiteAlpha.900', 'blackAlpha.400')}
+          border="1px solid"
+          borderColor={useColorModeValue("sand.200", "ink.700")}
+          boxShadow={'0 24px 48px -36px rgba(0, 0, 0, 0.5)'}
           w={{
             base:"full",
-            sm:"400px",
-            
-        }
-        }
-          p={8}>
+            sm:"420px",
+        }}
+          p={{ base: 6, md: 8 }}
+          backdropFilter="blur(10px)"
+        >
           <Stack spacing={4}>
             <HStack>
             
@@ -118,17 +123,18 @@ export default function LoginCard() {
               onClick={handleLogin}
                 loadingText="Loggin in"
                 size="lg"
-                bg={useColorModeValue("gray.600","gray.700")}
-                color={'white'}
+                colorScheme="brand"
                 _hover={{
-                  bg: 'gray.700',
-                }}>
+                  transform: "translateY(-1px)",
+                }}
+                transition="all 180ms ease"
+              >
                 Login
               </Button>
             </Stack>
             <Stack pt={6}>
               <Text align={'center'}>
-             Don't have an Account? <Link color={'blue.400'}
+             Don't have an Account? <Link color={'brand.500'}
              onClick={()=>setAuthScreen("signup")}>Signup</Link>
               </Text>
             </Stack>

@@ -18,9 +18,23 @@ const notificationSchema = new mongoose.Schema({
     },
     postImg:{
         type:String,
+        default:null
+    },
+    postVideo:{
+        type:String,
+        default:null
+    },
+    postVideoFileId:{
+        type:mongoose.Schema.Types.ObjectId,
+        default:null
+    },
+    hasVideo:{
+        type:Boolean,
+        default:false
     },
     likedText:{
-        type:String
+        type:String,
+        default:""
     },
     read:{
         type:Boolean,
