@@ -1,4 +1,4 @@
-# 🎙️ VoxSpace
+# 🎙️ ConnectHub
 
 > **A modern social media platform with real-time audio spaces, stories, and comprehensive social features**
 
@@ -8,7 +8,7 @@
 [![Socket.IO](https://img.shields.io/badge/Socket.IO-4.8.0-010101?logo=socket.io)](https://socket.io/)
 [![WebRTC](https://img.shields.io/badge/WebRTC-P2P-333333?logo=webrtc)](https://webrtc.org/)
 
-VoxSpace is a full-featured social media platform that combines traditional social networking with innovative real-time audio communication. Built with modern web technologies, it offers a seamless experience for sharing content, connecting with others, and engaging in live audio conversations.
+ConnectHub is a full-featured social media platform that combines traditional social networking with innovative real-time audio communication. Built with modern web technologies, it offers a seamless experience for sharing content, connecting with others, and engaging in live audio conversations.
 
 ## ✨ Features
 
@@ -90,8 +90,8 @@ VoxSpace is a full-featured social media platform that combines traditional soci
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/yourusername/voxspace.git
-cd voxspace/threads-app
+git clone https://github.com/arunpravin125/ConnectHub.git
+cd ConnectHub/threads-app
 ```
 
 ### 2. Install dependencies
@@ -114,7 +114,7 @@ PORT=4900
 NODE_ENV=development
 
 # Database
-MONGO_URI=mongodb://localhost:27017/voxspace
+MONGO_URI=mongodb://localhost:27017/connecthub
 
 # JWT
 JWT_SECRET=your-super-secret-jwt-key

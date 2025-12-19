@@ -3,7 +3,7 @@
 ## Short Description (for GitHub repo)
 
 ```
-🎙️ A modern social media platform with real-time audio spaces, stories, posts, and chat. Built with React, Node.js, MongoDB, and WebRTC.
+🎙️ ConnectHub - A modern social media platform with real-time audio spaces, stories, posts, and chat. Built with React, Node.js, MongoDB, and WebRTC.
 ```
 
 ## Topics/Tags (for GitHub)
