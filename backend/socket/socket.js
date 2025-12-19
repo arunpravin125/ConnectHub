@@ -17,6 +17,7 @@ const allowedOrigins = [
   "http://172.20.208.1:3005/",
   "http://localhost:5173", // Vite default port
   "https://connecthub-oddy.onrender.com",
+  "https://connecthub-15.onrender.com",
   process.env.FRONTEND_URL,
 ].filter(Boolean); // Remove undefined values
 
