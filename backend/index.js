@@ -30,7 +30,9 @@ const allowedOrigins = [
   "http://localhost:3005",
   "http://localhost:5173", // Vite default port
   "https://connecthub-oddy.onrender.com",
+  "https://connecthub-15.onrender.com",
   process.env.FRONTEND_URL,
+  process.env.RENDER_EXTERNAL_URL, // Render provides this automatically
 ].filter(Boolean);
 
 // Helper function to check if origin is a local network IP
@@ -44,11 +46,26 @@ function isLocalNetworkOrigin(origin) {
   return localNetworkPattern.test(origin);
 }
 
+// Helper function to check if origin is a Render URL
+function isRenderOrigin(origin) {
+  if (!origin) return false;
+  // Match Render URLs: *.onrender.com (with or without trailing slash, with or without port/path)
+  const normalized = origin.replace(/\/$/, "").toLowerCase();
+  // Match: https://anything.onrender.com (with optional port, path, etc.)
+  const renderPattern = /^https?:\/\/[\w-]+\.onrender\.com/;
+  return renderPattern.test(normalized);
+}
+
 app.use(
   cors({
     origin: function (origin, callback) {
       // Allow requests with no origin (like mobile apps, Postman, etc.)
       if (!origin) return callback(null, true);
+
+      // Log for debugging (remove in production if needed)
+      console.log(
+        `[CORS] Checking origin: ${origin}, NODE_ENV: ${process.env.NODE_ENV}`
+      );
 
       // In development, allow localhost, 127.0.0.1, and local network IPs
       if (process.env.NODE_ENV !== "production") {
@@ -57,18 +74,43 @@ app.use(
           origin.startsWith("http://127.0.0.1:") ||
           isLocalNetworkOrigin(origin)
         ) {
+          console.log(`[CORS] Allowed (development): ${origin}`);
           return callback(null, true);
         }
       }
 
+      // Always allow Render URLs (both development and production)
+      if (isRenderOrigin(origin)) {
+        console.log(`[CORS] Allowed (Render URL): ${origin}`);
+        return callback(null, true);
+      }
+
       // Check against allowed origins (exact match, no trailing slash)
-      const normalizedOrigin = origin.replace(/\/$/, ""); // Remove trailing slash
-      const normalizedAllowed = allowedOrigins.map((o) => o.replace(/\/$/, ""));
+      const normalizedOrigin = origin.replace(/\/$/, "").toLowerCase(); // Remove trailing slash and normalize
+      const normalizedAllowed = allowedOrigins.map((o) =>
+        o.replace(/\/$/, "").toLowerCase()
+      );
 
       if (normalizedAllowed.indexOf(normalizedOrigin) !== -1) {
+        console.log(`[CORS] Allowed (explicit): ${origin}`);
         callback(null, true);
       } else {
-        console.warn(`CORS blocked origin: ${origin}`);
+        // In production on Render, be more permissive - allow if it looks like a valid URL
+        if (process.env.NODE_ENV === "production" && process.env.RENDER) {
+          // If we're on Render and it's a valid HTTPS URL, allow it
+          if (origin.startsWith("https://")) {
+            console.log(
+              `[CORS] Allowed (Render production fallback): ${origin}`
+            );
+            return callback(null, true);
+          }
+        }
+
+        console.warn(`[CORS] Blocked origin: ${origin}`);
+        console.warn(`[CORS] NODE_ENV: ${process.env.NODE_ENV}`);
+        console.warn(`[CORS] RENDER: ${process.env.RENDER}`);
+        console.warn(`[CORS] Allowed origins:`, allowedOrigins);
+        console.warn(`[CORS] Is Render origin:`, isRenderOrigin(origin));
         callback(new Error("Not allowed by CORS"));
       }
     },
