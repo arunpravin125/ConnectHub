@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: connecthub-backend
+    env: node
+    buildCommand: npm install --legacy-peer-deps && npm install --legacy-peer-deps --prefix frontend && npm run build --prefix frontend
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      # Add your other environment variables in Render dashboard
+
